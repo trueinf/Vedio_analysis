@@ -1,14 +1,44 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getJob, getResult, uploadVideo } from "../lib/api";
+import { getCollectionSummary, getJob, getResult, uploadVideo, uploadVideos } from "../lib/api";
 import { Button, Card } from "../components/ui";
 import { Gauge } from "../components/gauge";
+
+type UploadJobRow = {
+  id: string;
+  name: string;
+  status: string;
+  stage: string;
+  progress: number;
+};
+
+type CollectionSummary = {
+  collection_id: string;
+  total_videos: number;
+  completed_videos: number;
+  failed_videos: number;
+  processing_videos: number;
+  summary: {
+    common_patterns: Record<string, { most_common: string; count: number; share: number; distribution: Record<string, number> }>;
+    consistency: Record<string, { mean: number | null; min: number | null; max: number | null; std: number | null }>;
+    recurring_strengths: { pattern: string; count: number }[];
+    recurring_issues: { pattern: string; count: number }[];
+    best_video: string | null;
+    worst_video: string | null;
+    per_video?: { job_id: string; score: number; key_issue: string; key_strength: string }[];
+    failed_job_ids?: string[];
+  };
+};
 
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function labelCase(s: string): string {
+  return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function StatCard(props: {
@@ -39,25 +69,61 @@ function StatCard(props: {
 
 export default function Page() {
   const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploadedJobs, setUploadedJobs] = useState<UploadJobRow[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
   const [stage, setStage] = useState<string>("");
   const [progress, setProgress] = useState<number>(0);
   const [jobError, setJobError] = useState<string>("");
   const [result, setResult] = useState<any>(null);
+  const [loadedResultJobId, setLoadedResultJobId] = useState<string | null>(null);
+  const [collectionId, setCollectionId] = useState<string>("");
+  const [collectionSummary, setCollectionSummary] = useState<CollectionSummary | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function startUpload() {
-    if (!file) return;
+    const batch = files.length ? files : file ? [file] : [];
+    if (!batch.length) return;
     setBusy(true);
     setJobError("");
     setResult(null);
     try {
-      const u = await uploadVideo(file);
-      setJobId(u.job_id);
-      setStatus(u.status);
-      setStage("queued");
-      setProgress(0);
+      const newRows: UploadJobRow[] = [];
+      if (batch.length > 1) {
+        const resp = await uploadVideos(batch);
+        if (resp.collection_id) setCollectionId(resp.collection_id);
+        setCollectionSummary(null);
+        resp.jobs.forEach((u, idx) => {
+          const f = batch[idx];
+          if (!f) return;
+          newRows.push({
+            id: u.job_id,
+            name: f.name,
+            status: u.status,
+            stage: "queued",
+            progress: 0,
+          });
+        });
+      } else {
+        const u = await uploadVideo(batch[0]);
+        if (u.collection_id) setCollectionId(u.collection_id);
+        setCollectionSummary(null);
+        newRows.push({
+          id: u.job_id,
+          name: batch[0].name,
+          status: u.status,
+          stage: "queued",
+          progress: 0,
+        });
+      }
+      setUploadedJobs((prev) => [...newRows, ...prev]);
+      if (newRows[0]) {
+        setJobId(newRows[0].id);
+        setStatus(newRows[0].status);
+        setStage("queued");
+        setProgress(0);
+      }
     } catch (e: any) {
       setJobError(e?.message ?? "Upload failed");
     } finally {
@@ -66,20 +132,78 @@ export default function Page() {
   }
 
   async function refresh() {
-    if (!jobId) return;
+    if (!jobId && !uploadedJobs.length) return;
     setBusy(true);
     setJobError("");
     try {
-      const job = await getJob(jobId);
-      setStatus(job.status);
-      // @ts-expect-error backend returns stage/progress
-      setStage((job as any).stage ?? "");
-      // @ts-expect-error backend returns stage/progress
-      setProgress(Number((job as any).progress ?? 0));
-      if (job.status === "failed") setJobError(job.error_message || "Job failed");
-      if (job.status === "completed") {
-        const r = await getResult(jobId);
-        setResult(r);
+      const ids = Array.from(new Set([...(jobId ? [jobId] : []), ...uploadedJobs.map((j) => j.id)]));
+      const updates = await Promise.all(
+        ids.map(async (id) => {
+          const job = await getJob(id);
+          return {
+            id,
+            status: job.status,
+            stage: (job as any).stage ?? "",
+            progress: Number((job as any).progress ?? 0),
+            error: job.error_message || "",
+          };
+        })
+      );
+
+      setUploadedJobs((prev) =>
+        prev.map((row) => {
+          const u = updates.find((x) => x.id === row.id);
+          return u ? { ...row, status: u.status, stage: u.stage, progress: u.progress } : row;
+        })
+      );
+
+      const selected = updates.find((u) => u.id === jobId);
+      let selectedCompletedLoaded = false;
+      if (selected) {
+        setStatus(selected.status);
+        setStage(selected.stage);
+        setProgress(selected.progress);
+        if (selected.status === "failed") setJobError(selected.error || "Job failed");
+        if (selected.status === "completed") {
+          if (loadedResultJobId !== selected.id) {
+            const r = await getResult(selected.id);
+            setResult(r);
+            setLoadedResultJobId(selected.id);
+          }
+          selectedCompletedLoaded = true;
+        }
+      }
+
+      // If selected job is not completed yet, auto-switch to the first completed
+      // job in the current list and load its result.
+      if (!selectedCompletedLoaded) {
+        const firstCompleted = uploadedJobs.find((row) => {
+          const u = updates.find((x) => x.id === row.id);
+          return u?.status === "completed";
+        });
+        if (firstCompleted) {
+          const u = updates.find((x) => x.id === firstCompleted.id);
+          if (u) {
+            setJobId(u.id);
+            setStatus(u.status);
+            setStage(u.stage);
+            setProgress(u.progress);
+            if (loadedResultJobId !== u.id) {
+              const r = await getResult(u.id);
+              setResult(r);
+              setLoadedResultJobId(u.id);
+            }
+          }
+        }
+      }
+
+      if (collectionId && ids.length > 1) {
+        try {
+          const cs = (await getCollectionSummary(collectionId)) as CollectionSummary;
+          setCollectionSummary(cs);
+        } catch {
+          // ignore transient summary fetch failures while jobs are in progress
+        }
       }
     } catch (e: any) {
       setJobError(e?.message ?? "Refresh failed");
@@ -89,14 +213,16 @@ export default function Page() {
   }
 
   useEffect(() => {
-    if (!jobId) return;
-    if (status !== "queued" && status !== "processing") return;
+    const activeCount = uploadedJobs.filter((j) => j.status === "queued" || j.status === "processing").length;
+    const hasActive = activeCount > 0 || (jobId && (status === "queued" || status === "processing"));
+    if (!hasActive) return;
+    const intervalMs = activeCount > 1 ? 3000 : 5000;
     const t = setInterval(() => {
       refresh().catch(() => {});
-    }, 3000);
+    }, intervalMs);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, status]);
+  }, [jobId, status, uploadedJobs]);
 
   const cards = useMemo(() => {
     const s = result?.summary ?? {};
@@ -158,7 +284,7 @@ export default function Page() {
             </div>
             <div>
               <div className="font-semibold">AI Video Performance Analyzer</div>
-              <div className="text-xs text-muted">Upload a video and get delivery insights</div>
+              <div className="text-xs text-muted">Upload one or many videos and get delivery insights</div>
             </div>
           </div>
 
@@ -178,15 +304,23 @@ export default function Page() {
               <input
                 type="file"
                 accept="video/*"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                multiple
+                onChange={(e) => {
+                  const picked = Array.from(e.target.files ?? []);
+                  setFiles(picked);
+                  setFile(picked[0] ?? null);
+                }}
                 className="text-sm"
               />
               <Button onClick={startUpload} disabled={!file || busy}>
                 Analyze
               </Button>
-              <Button variant="ghost" onClick={refresh} disabled={!jobId || busy}>
+              <Button variant="ghost" onClick={refresh} disabled={(!jobId && !uploadedJobs.length) || busy}>
                 Refresh
               </Button>
+              <div className="text-xs text-muted">
+                {files.length ? `${files.length} videos selected` : "Select one or more videos"}
+              </div>
               <div className="text-sm text-muted">
                 Status: <span className="font-medium text-ink">{status || "-"}</span>
               </div>
@@ -198,6 +332,56 @@ export default function Page() {
               ) : null}
               {jobError ? <div className="text-sm text-bad">{jobError}</div> : null}
             </div>
+            {uploadedJobs.length ? (
+              <div className="mt-4 border border-black/5 rounded-lg overflow-hidden">
+                <div className="max-h-44 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="text-left px-2 py-2">Video</th>
+                        <th className="text-left px-2 py-2">Status</th>
+                        <th className="text-left px-2 py-2">Progress</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uploadedJobs.map((j) => (
+                        <tr
+                          key={j.id}
+                          className={`border-t cursor-pointer ${jobId === j.id ? "bg-blue-50" : ""}`}
+                          onClick={async () => {
+                            setJobId(j.id);
+                            setStatus(j.status);
+                            setStage(j.stage);
+                            setProgress(j.progress);
+                            if (j.status === "completed") {
+                              try {
+                                if (loadedResultJobId !== j.id) {
+                                  const r = await getResult(j.id);
+                                  setResult(r);
+                                  setLoadedResultJobId(j.id);
+                                }
+                              } catch {
+                                setResult(null);
+                                setLoadedResultJobId(null);
+                              }
+                            } else {
+                              setResult(null);
+                              setLoadedResultJobId(null);
+                            }
+                          }}
+                        >
+                          <td className="px-2 py-2 truncate max-w-[280px]" title={j.name}>
+                            {j.name}
+                          </td>
+                          <td className="px-2 py-2">{j.status}</td>
+                          <td className="px-2 py-2">{Math.round((j.progress || 0) * 100)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
           </Card>
 
           <div className="col-span-12 lg:col-span-5 grid gap-5">
@@ -402,6 +586,228 @@ export default function Page() {
                   </ul>
                 </div>
               ) : null}
+            </Card>
+          ) : null}
+          {result ? (
+            <Card className="col-span-12 p-4">
+              <div className="text-sm font-semibold mb-3">Description View</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  {
+                    metric: "Speech Rate",
+                    analyzed: "How fast you speak during detected speech segments.",
+                    measured: `Words/min = words / speaking minutes. Current: ${
+                      typeof cards.wpm === "number" ? Math.round(cards.wpm) : "N/A"
+                    } WPM.`,
+                    improve: ["Target 95-160 WPM.", "Pause after key points."],
+                  },
+                  {
+                    metric: "Tonal Variation",
+                    analyzed: "Pitch movement and vocal variety.",
+                    measured: `Computed with librosa piptrack pitch std. Label: ${
+                      cards.tonalLabel ? labelCase(String(cards.tonalLabel)) : "N/A"
+                    }.`,
+                    improve: ["Stress key words.", "Vary intonation per sentence."],
+                  },
+                  {
+                    metric: "Filler Words",
+                    analyzed: 'Filler terms like "um", "uh", "like", "you know".',
+                    measured: `Counted from transcript and normalized per minute. Current: ${
+                      typeof cards.fillers === "number" ? cards.fillers.toFixed(1) : "N/A"
+                    }/min.`,
+                    improve: ["Replace fillers with short silence.", "Start slower."],
+                  },
+                  {
+                    metric: "Eye Contact Ratio",
+                    analyzed: "How often gaze is on camera when face is visible.",
+                    measured: `On-camera face frames / face-detected frames. Current: ${
+                      typeof cards.eye === "number" ? `${Math.round(cards.eye * 100)}%` : "N/A"
+                    }.`,
+                    improve: ["Look at camera during sentence endings.", "Keep notes near webcam."],
+                  },
+                  {
+                    metric: "Expression Change",
+                    analyzed: "Frequency of expression transitions.",
+                    measured: `Expression label changes per minute. Current: ${
+                      Number.isFinite(cards.exprChangesPerMin) ? cards.exprChangesPerMin.toFixed(1) : "N/A"
+                    }/min.`,
+                    improve: ["Use deliberate expression shifts.", "Add positive expression on key moments."],
+                  },
+                  {
+                    metric: "Gesture Frequency",
+                    analyzed: "How often gesture events happen.",
+                    measured: `Gesture events/min with movement threshold + cooldown. Current: ${
+                      typeof cards.gestures === "number" ? cards.gestures.toFixed(1) : "N/A"
+                    }/min.`,
+                    improve: ["Use one gesture per idea.", "Keep gestures in chest-level frame."],
+                  },
+                ].map((d) => (
+                  <div key={d.metric} className="border border-black/5 rounded-lg p-3">
+                    <div className="font-semibold text-sm">{d.metric}</div>
+                    <div className="text-xs text-muted mt-2">
+                      <span className="font-medium text-ink">Analyzed:</span> {d.analyzed}
+                    </div>
+                    <div className="text-xs text-muted mt-1">
+                      <span className="font-medium text-ink">Measured:</span> {d.measured}
+                    </div>
+                    <div className="text-xs text-muted mt-1">
+                      <span className="font-medium text-ink">How to improve:</span>
+                    </div>
+                    <ul className="text-xs text-muted list-disc pl-5 mt-1">
+                      {d.improve.map((t) => (
+                        <li key={t}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
+          {collectionSummary ? (
+            <Card className="col-span-12 p-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold">Overall Across Uploaded Videos</div>
+                <div className="text-xs">
+                  {collectionSummary.processing_videos === 0 ? (
+                    <span className="px-2 py-1 rounded bg-green-100 text-green-700">
+                      All done ({collectionSummary.completed_videos}/{collectionSummary.total_videos})
+                    </span>
+                  ) : (
+                    <span className="text-muted">
+                      {collectionSummary.completed_videos}/{collectionSummary.total_videos} completed
+                    </span>
+                  )}
+                </div>
+              </div>
+              {collectionSummary.completed_videos === 0 ? (
+                <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  Waiting for completed videos to compute overall patterns. Aggregates will appear automatically
+                  after the first video finishes.
+                </div>
+              ) : null}
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                <div className="rounded-md border border-black/5 p-2">
+                  <div className="text-muted">Completed</div>
+                  <div className="font-semibold">{collectionSummary.completed_videos}</div>
+                </div>
+                <div className="rounded-md border border-black/5 p-2">
+                  <div className="text-muted">Processing/Queued</div>
+                  <div className="font-semibold">{collectionSummary.processing_videos}</div>
+                </div>
+                <div className="rounded-md border border-black/5 p-2">
+                  <div className="text-muted">Failed</div>
+                  <div className="font-semibold">{collectionSummary.failed_videos}</div>
+                </div>
+                <div className="rounded-md border border-black/5 p-2">
+                  <div className="text-muted">Collection ID</div>
+                  <div className="font-semibold truncate" title={collectionSummary.collection_id}>
+                    {collectionSummary.collection_id}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-md border border-black/5 p-3">
+                  <div className="text-xs font-semibold mb-2">Common Patterns (Similar / Same)</div>
+                  <ul className="text-xs text-muted space-y-1">
+                    {Object.entries(collectionSummary.summary.common_patterns).length ? (
+                      Object.entries(collectionSummary.summary.common_patterns).map(([k, v]) => (
+                        <li key={k}>
+                          {k}: <span className="font-medium text-ink">{v.most_common}</span> ({v.count}/
+                          {collectionSummary.completed_videos}, {Math.round(v.share * 100)}%)
+                        </li>
+                      ))
+                    ) : (
+                      <li>Not enough completed videos yet.</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="rounded-md border border-black/5 p-3">
+                  <div className="text-xs font-semibold mb-2">Consistency</div>
+                  <ul className="text-xs text-muted space-y-1">
+                    {Object.entries(collectionSummary.summary.consistency).length ? (
+                      Object.entries(collectionSummary.summary.consistency).map(([k, v]) => (
+                        <li key={k}>
+                          {k}: mean {v.mean ?? "-"}, std {v.std ?? "-"} (min {v.min ?? "-"}, max {v.max ?? "-"})
+                        </li>
+                      ))
+                    ) : (
+                      <li>Not enough completed videos yet.</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="rounded-md border border-black/5 p-3">
+                  <div className="text-xs font-semibold mb-2">Recurring Strengths</div>
+                  <ul className="text-xs text-muted space-y-1">
+                    {collectionSummary.summary.recurring_strengths.length ? (
+                      collectionSummary.summary.recurring_strengths.map((x) => (
+                        <li key={x.pattern}>
+                          {x.pattern} ({x.count})
+                        </li>
+                      ))
+                    ) : (
+                      <li>-</li>
+                    )}
+                  </ul>
+                </div>
+                <div className="rounded-md border border-black/5 p-3">
+                  <div className="text-xs font-semibold mb-2">Recurring Issues</div>
+                  <ul className="text-xs text-muted space-y-1">
+                    {collectionSummary.summary.recurring_issues.length ? (
+                      collectionSummary.summary.recurring_issues.map((x) => (
+                        <li key={x.pattern}>
+                          {x.pattern} ({x.count})
+                        </li>
+                      ))
+                    ) : (
+                      <li>-</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+              <div className="mt-4 rounded-md border border-black/5 p-3">
+                <div className="text-xs font-semibold mb-2">Per-video Contribution</div>
+                {collectionSummary.summary.per_video?.length ? (
+                  <div className="max-h-44 overflow-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 text-slate-600">
+                        <tr>
+                          <th className="text-left px-2 py-1">Video ID</th>
+                          <th className="text-left px-2 py-1">Score</th>
+                          <th className="text-left px-2 py-1">Key Issue</th>
+                          <th className="text-left px-2 py-1">Key Strength</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {collectionSummary.summary.per_video.map((v) => (
+                          <tr key={v.job_id} className="border-t">
+                            <td className="px-2 py-1 truncate max-w-[280px]" title={v.job_id}>
+                              {v.job_id}
+                            </td>
+                            <td className="px-2 py-1">{v.score}</td>
+                            <td className="px-2 py-1">{v.key_issue}</td>
+                            <td className="px-2 py-1">{v.key_strength}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted">Not enough completed videos yet.</div>
+                )}
+              </div>
+              <div className="mt-3 text-xs text-muted">
+                Failed videos:{" "}
+                <span className="font-medium text-ink">
+                  {collectionSummary.summary.failed_job_ids?.length
+                    ? collectionSummary.summary.failed_job_ids.join(", ")
+                    : "-"}
+                </span>
+              </div>
+              <div className="mt-3 text-xs text-muted">
+                Best video: <span className="font-medium text-ink">{collectionSummary.summary.best_video ?? "-"}</span>{" "}
+                | Worst video: <span className="font-medium text-ink">{collectionSummary.summary.worst_video ?? "-"}</span>
+              </div>
             </Card>
           ) : null}
         </div>

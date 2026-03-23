@@ -35,5 +35,21 @@ class HealthOut(BaseModel):
 class UploadResponse(BaseModel):
     job_id: str
     status: JobStatus
+    collection_id: str = ""
     message: str = Field(default="uploaded")
+
+
+class BatchUploadResponse(BaseModel):
+    jobs: list[UploadResponse]
+    collection_id: str = ""
+    message: str = Field(default="uploaded")
+
+
+class CollectionSummaryOut(BaseModel):
+    collection_id: str
+    total_videos: int
+    completed_videos: int
+    failed_videos: int
+    processing_videos: int
+    summary: dict[str, Any]
 

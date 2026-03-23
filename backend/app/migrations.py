@@ -19,6 +19,9 @@ def ensure_job_progress_columns(engine: Engine) -> None:
         if not _has_column(engine, "jobs", "progress"):
             with engine.begin() as c:
                 c.execute(text("ALTER TABLE jobs ADD COLUMN progress FLOAT NOT NULL DEFAULT 0.0"))
+        if not _has_column(engine, "jobs", "collection_id"):
+            with engine.begin() as c:
+                c.execute(text("ALTER TABLE jobs ADD COLUMN collection_id VARCHAR(36) NOT NULL DEFAULT ''"))
     except Exception:
         # If something goes wrong, keep startup alive; worker will still function.
         return

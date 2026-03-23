@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -9,16 +10,193 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.db import Base, engine, get_db
 from app.models import Job, JobStatus
 from app.migrations import ensure_agent_tables, ensure_job_progress_columns
-from app.schemas import HealthOut, JobCreateResponse, JobOut, JobResultOut, UploadResponse
+from app.schemas import BatchUploadResponse, CollectionSummaryOut, HealthOut, JobCreateResponse, JobOut, JobResultOut, UploadResponse
 from app.settings import settings
 from app.utils.files import ensure_dir, safe_filename
 from app.worker_queue import enqueue_job
 from app.video_meta import probe_duration_sec
+
+
+def _band(metric: str, value: float | str | None) -> str:
+    if value is None:
+        return "unknown"
+    if metric == "speech_rate":
+        v = float(value)
+        if v < 95:
+            return "slow"
+        if v > 160:
+            return "fast"
+        return "normal"
+    if metric == "fillers":
+        v = float(value)
+        if v <= 2:
+            return "low"
+        if v <= 5:
+            return "moderate"
+        return "high"
+    if metric == "eye_contact":
+        v = float(value)
+        if v < 0.3:
+            return "low"
+        if v < 0.5:
+            return "decent"
+        return "good"
+    if metric == "gestures":
+        v = float(value)
+        if v < 4:
+            return "low"
+        if v <= 20:
+            return "normal"
+        return "high"
+    if metric == "expressions":
+        v = float(value)
+        if v < 20:
+            return "low"
+        if v <= 60:
+            return "normal"
+        return "high"
+    if metric == "tonal":
+        s = str(value).lower()
+        if "express" in s:
+            return "expressive"
+        if "moderate" in s or "high variation" in s:
+            return "moderate"
+        if "monotone" in s:
+            return "monotone"
+        if "flat" in s:
+            return "flat"
+        return s
+    return "unknown"
+
+
+def _collection_summary(jobs: list[Job]) -> dict:
+    completed = [j for j in jobs if j.status == JobStatus.completed and j.result_path and Path(j.result_path).exists()]
+    results: list[dict] = []
+    for j in completed:
+        try:
+            results.append(json.loads(Path(j.result_path).read_text(encoding="utf-8")))
+        except Exception:
+            continue
+
+    failed_job_ids = [j.id for j in jobs if j.status == JobStatus.failed]
+
+    if not results:
+        return {
+            "common_patterns": {},
+            "consistency": {},
+            "recurring_strengths": [],
+            "recurring_issues": [],
+            "best_video": None,
+            "worst_video": None,
+            "per_video": [],
+            "failed_job_ids": failed_job_ids,
+        }
+
+    metric_values = {
+        "speech_rate": [],
+        "fillers": [],
+        "eye_contact": [],
+        "gestures": [],
+        "expressions": [],
+        "tonal": [],
+    }
+    score_by_video: list[tuple[str, float]] = []
+    per_video: list[dict] = []
+    for r in results:
+        cards = r.get("cards", {}) or {}
+        jid = str(r.get("job_id", ""))
+        metric_values["speech_rate"].append(cards.get("speech_rate", {}).get("wpm"))
+        metric_values["fillers"].append(cards.get("filler_words", {}).get("per_minute"))
+        metric_values["eye_contact"].append(cards.get("eye_contact", {}).get("on_camera_ratio"))
+        metric_values["gestures"].append(cards.get("gestures", {}).get("per_minute"))
+        expr = cards.get("expressions", {}).get("change_count")
+        dur = float((r.get("summary", {}) or {}).get("duration_sec") or 0.0)
+        metric_values["expressions"].append((float(expr) / (dur / 60.0)) if expr is not None and dur > 0 else None)
+        metric_values["tonal"].append((cards.get("tonal_variation", {}) or {}).get("label"))
+        score = float((r.get("summary", {}) or {}).get("overall_score") or 0.0)
+        score_by_video.append((jid, score))
+
+        # Per-video contribution summary (what stood out most for this video)
+        b_speech = _band("speech_rate", cards.get("speech_rate", {}).get("wpm"))
+        b_fill = _band("fillers", cards.get("filler_words", {}).get("per_minute"))
+        b_eye = _band("eye_contact", cards.get("eye_contact", {}).get("on_camera_ratio"))
+        b_gesture = _band("gestures", cards.get("gestures", {}).get("per_minute"))
+        b_tonal = _band("tonal", (cards.get("tonal_variation", {}) or {}).get("label"))
+        bands = {
+            "speech_rate": b_speech,
+            "fillers": b_fill,
+            "eye_contact": b_eye,
+            "gestures": b_gesture,
+            "tonal": b_tonal,
+        }
+        issue = next((f"{k}:{v}" for k, v in bands.items() if v in ("high", "low", "fast", "slow", "monotone", "flat")), "none")
+        strength = next((f"{k}:{v}" for k, v in bands.items() if v in ("normal", "good", "expressive", "moderate", "decent")), "none")
+        per_video.append({"job_id": jid, "score": round(score, 1), "key_issue": issue, "key_strength": strength})
+
+    common_patterns: dict[str, dict] = {}
+    consistency: dict[str, dict] = {}
+    issue_counts: dict[str, int] = {}
+    strength_counts: dict[str, int] = {}
+    for key, values in metric_values.items():
+        bands = [_band(key, v) for v in values if v is not None]
+        freq: dict[str, int] = {}
+        for b in bands:
+            freq[b] = freq.get(b, 0) + 1
+        if freq:
+            top_label = max(freq, key=freq.get)
+            top_count = freq[top_label]
+            common_patterns[key] = {
+                "most_common": top_label,
+                "count": top_count,
+                "share": round(top_count / len(bands), 3) if bands else 0.0,
+                "distribution": freq,
+            }
+            for b, n in freq.items():
+                if b in ("high", "low", "fast", "slow", "monotone", "flat"):
+                    issue_counts[f"{key}:{b}"] = issue_counts.get(f"{key}:{b}", 0) + n
+                if b in ("normal", "good", "expressive", "moderate", "decent"):
+                    strength_counts[f"{key}:{b}"] = strength_counts.get(f"{key}:{b}", 0) + n
+        numeric = [float(v) for v in values if isinstance(v, (int, float))]
+        if numeric:
+            consistency[key] = {
+                "mean": round(statistics.fmean(numeric), 3),
+                "min": round(min(numeric), 3),
+                "max": round(max(numeric), 3),
+                "std": round(statistics.pstdev(numeric), 3) if len(numeric) > 1 else 0.0,
+            }
+        else:
+            consistency[key] = {"mean": None, "min": None, "max": None, "std": None}
+
+    score_by_video = [x for x in score_by_video if x[0]]
+    best_video = max(score_by_video, key=lambda x: x[1])[0] if score_by_video else None
+    worst_video = min(score_by_video, key=lambda x: x[1])[0] if score_by_video else None
+
+    recurring_issues = sorted(
+        [{"pattern": k, "count": v} for k, v in issue_counts.items()],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:5]
+    recurring_strengths = sorted(
+        [{"pattern": k, "count": v} for k, v in strength_counts.items()],
+        key=lambda x: x["count"],
+        reverse=True,
+    )[:5]
+
+    return {
+        "common_patterns": common_patterns,
+        "consistency": consistency,
+        "recurring_strengths": recurring_strengths,
+        "recurring_issues": recurring_issues,
+        "best_video": best_video,
+        "worst_video": worst_video,
+        "per_video": per_video,
+        "failed_job_ids": failed_job_ids,
+    }
 
 
 def create_app() -> FastAPI:
@@ -61,6 +239,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/jobs/upload", response_model=UploadResponse)
     async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadResponse:
+        if not file:
+            raise HTTPException(status_code=400, detail="file is required")
         job_id = str(uuid.uuid4())
         original = safe_filename(file.filename or "upload.mp4")
         ext = Path(original).suffix or ".mp4"
@@ -84,13 +264,70 @@ def create_app() -> FastAPI:
             status=JobStatus.queued,
             original_filename=original,
             video_path=str(dest),
+            collection_id=job_id,
             duration_sec=duration,
         )
         db.add(job)
         db.commit()
 
         enqueue_job(job_id)
-        return UploadResponse(job_id=job_id, status=job.status.value)
+        return UploadResponse(job_id=job_id, status=job.status.value, collection_id=job_id)
+
+    @app.post("/api/jobs/upload/batch", response_model=BatchUploadResponse)
+    async def upload_videos(files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> BatchUploadResponse:
+        if not files:
+            raise HTTPException(status_code=400, detail="files are required")
+        out: list[UploadResponse] = []
+        collection_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        for file in files:
+            job_id = str(uuid.uuid4())
+            original = safe_filename(file.filename or "upload.mp4")
+            ext = Path(original).suffix or ".mp4"
+            dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
+
+            with dest.open("wb") as f:
+                while True:
+                    chunk = await file.read(1024 * 1024 * 8)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+            duration = probe_duration_sec(str(dest), ffprobe_bin=settings.ffprobe_bin)
+            job = Job(
+                id=job_id,
+                created_at=now,
+                updated_at=now,
+                status=JobStatus.queued,
+                original_filename=original,
+                video_path=str(dest),
+                collection_id=collection_id,
+                duration_sec=duration,
+            )
+            db.add(job)
+            db.commit()
+            enqueue_job(job_id)
+            out.append(UploadResponse(job_id=job_id, status=job.status.value, collection_id=collection_id))
+        return BatchUploadResponse(jobs=out, collection_id=collection_id, message=f"uploaded {len(out)} file(s)")
+
+    @app.get("/api/collections/{collection_id}/summary", response_model=CollectionSummaryOut)
+    def get_collection_summary(collection_id: str, db: Session = Depends(get_db)) -> CollectionSummaryOut:
+        jobs = list(db.execute(select(Job).where(Job.collection_id == collection_id)).scalars().all())
+        if not jobs:
+            raise HTTPException(status_code=404, detail="collection not found")
+        total = len(jobs)
+        completed = len([j for j in jobs if j.status == JobStatus.completed])
+        failed = len([j for j in jobs if j.status == JobStatus.failed])
+        processing = len([j for j in jobs if j.status in (JobStatus.queued, JobStatus.processing)])
+        summary = _collection_summary(jobs)
+        return CollectionSummaryOut(
+            collection_id=collection_id,
+            total_videos=total,
+            completed_videos=completed,
+            failed_videos=failed,
+            processing_videos=processing,
+            summary=summary,
+        )
 
     @app.get("/api/jobs/{job_id}", response_model=JobCreateResponse)
     def get_job(job_id: str, db: Session = Depends(get_db)) -> JobCreateResponse:

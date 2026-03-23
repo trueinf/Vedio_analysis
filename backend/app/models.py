@@ -25,6 +25,7 @@ class Job(Base):
 
     original_filename: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     video_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    collection_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
 
     duration_sec: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

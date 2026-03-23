@@ -12,11 +12,27 @@ export type Job = {
   error_message: string;
 };
 
-export async function uploadVideo(file: File): Promise<{ job_id: string; status: JobStatus }> {
+export async function uploadVideo(file: File): Promise<{ job_id: string; status: JobStatus; collection_id?: string }> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${API_BASE}/api/jobs/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  return await res.json();
+}
+
+export async function uploadVideos(
+  files: File[]
+): Promise<{ jobs: { job_id: string; status: JobStatus; collection_id?: string }[]; collection_id?: string }> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  const res = await fetch(`${API_BASE}/api/jobs/upload/batch`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`Batch upload failed (${res.status})`);
+  return await res.json();
+}
+
+export async function getCollectionSummary(collectionId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/collections/${collectionId}/summary`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Collection summary failed (${res.status})`);
   return await res.json();
 }
 
