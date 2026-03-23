@@ -36,6 +36,23 @@ class Job(Base):
     result_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
 
 
+class Channel(Base):
+    __tablename__ = "channels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    name: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+
+
+class Collection(Base):
+    __tablename__ = "collections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(36), ForeignKey("channels.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(256), default="", nullable=False)
+
+
 class Video(Base):
     __tablename__ = "videos"
 

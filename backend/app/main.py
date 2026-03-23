@@ -2,24 +2,66 @@ from __future__ import annotations
 
 import json
 import statistics
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.db import Base, engine, get_db
-from app.models import Job, JobStatus
+from app.models import Channel, Collection, Job, JobStatus
 from app.migrations import ensure_agent_tables, ensure_job_progress_columns
-from app.schemas import BatchUploadResponse, CollectionSummaryOut, HealthOut, JobCreateResponse, JobOut, JobResultOut, UploadResponse
+from app.schemas import (
+    BatchUploadResponse,
+    ChannelCollectionOut,
+    ChannelCollectionsOut,
+    ChannelItemOut,
+    ChannelListOut,
+    ChannelRenameIn,
+    CollectionSummaryOut,
+    HealthOut,
+    JobCreateResponse,
+    JobOut,
+    JobResultOut,
+    UploadResponse,
+)
 from app.settings import settings
 from app.utils.files import ensure_dir, safe_filename
 from app.worker_queue import enqueue_job
 from app.video_meta import probe_duration_sec
+
+
+def _suggest_channel_name(filenames: list[str]) -> tuple[str, str]:
+    # Lightweight heuristic from filename stem, e.g. "ifan_vlog_01.mp4" -> "ifan"
+    if not filenames:
+        return ("creator", "low")
+    first = Path(filenames[0]).stem.lower()
+    cleaned = re.sub(r"[^a-z0-9_\-\s]", " ", first)
+    tokens = [t for t in re.split(r"[\s_\-]+", cleaned) if t]
+    stop = {"video", "vlog", "short", "shorts", "clip", "final", "edit", "upload", "youtube", "yt", "part", "ep"}
+    candidates = [t for t in tokens if t not in stop and not t.isdigit()]
+    if not candidates:
+        return ("creator", "low")
+    name = candidates[0][:32]
+    return (name, "medium")
+
+
+def _get_or_create_channel(db: Session, channel_name: str) -> Channel:
+    normalized = (channel_name or "").strip()
+    if not normalized:
+        normalized = "creator"
+    existing = db.execute(select(Channel).where(func.lower(Channel.name) == normalized.lower())).scalar_one_or_none()
+    if existing:
+        return existing
+    ch = Channel(id=str(uuid.uuid4()), created_at=datetime.utcnow(), name=normalized)
+    db.add(ch)
+    db.commit()
+    return ch
 
 
 def _band(metric: str, value: float | str | None) -> str:
@@ -238,11 +280,27 @@ def create_app() -> FastAPI:
         return HealthOut()
 
     @app.post("/api/jobs/upload", response_model=UploadResponse)
-    async def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)) -> UploadResponse:
+    async def upload_video(
+        file: UploadFile = File(...),
+        channel_name: str = Form(""),
+        db: Session = Depends(get_db),
+    ) -> UploadResponse:
         if not file:
             raise HTTPException(status_code=400, detail="file is required")
         job_id = str(uuid.uuid4())
         original = safe_filename(file.filename or "upload.mp4")
+        suggested, conf = _suggest_channel_name([original])
+        final_channel = channel_name.strip() or suggested
+        channel = _get_or_create_channel(db, final_channel)
+        collection_id = str(uuid.uuid4())
+        collection = Collection(
+            id=collection_id,
+            created_at=datetime.utcnow(),
+            channel_id=channel.id,
+            title=f"{channel.name} single upload",
+        )
+        db.add(collection)
+        db.commit()
         ext = Path(original).suffix or ".mp4"
         dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
 
@@ -264,25 +322,49 @@ def create_app() -> FastAPI:
             status=JobStatus.queued,
             original_filename=original,
             video_path=str(dest),
-            collection_id=job_id,
+            collection_id=collection_id,
             duration_sec=duration,
         )
         db.add(job)
         db.commit()
 
         enqueue_job(job_id)
-        return UploadResponse(job_id=job_id, status=job.status.value, collection_id=job_id)
+        return UploadResponse(
+            job_id=job_id,
+            status=job.status.value,
+            collection_id=collection_id,
+            channel_id=channel.id,
+            channel_name=channel.name,
+            suggested_channel_name=suggested,
+            suggestion_confidence=conf,
+        )
 
     @app.post("/api/jobs/upload/batch", response_model=BatchUploadResponse)
-    async def upload_videos(files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> BatchUploadResponse:
+    async def upload_videos(
+        files: list[UploadFile] = File(...),
+        channel_name: str = Form(""),
+        collection_title: str = Form(""),
+        db: Session = Depends(get_db),
+    ) -> BatchUploadResponse:
         if not files:
             raise HTTPException(status_code=400, detail="files are required")
         out: list[UploadResponse] = []
+        originals = [safe_filename(f.filename or "upload.mp4") for f in files]
+        suggested, conf = _suggest_channel_name(originals)
+        final_channel = channel_name.strip() or suggested
+        channel = _get_or_create_channel(db, final_channel)
         collection_id = str(uuid.uuid4())
+        coll = Collection(
+            id=collection_id,
+            created_at=datetime.utcnow(),
+            channel_id=channel.id,
+            title=(collection_title or f"{channel.name} batch").strip(),
+        )
+        db.add(coll)
+        db.commit()
         now = datetime.utcnow()
-        for file in files:
+        for file, original in zip(files, originals):
             job_id = str(uuid.uuid4())
-            original = safe_filename(file.filename or "upload.mp4")
             ext = Path(original).suffix or ".mp4"
             dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
 
@@ -307,8 +389,26 @@ def create_app() -> FastAPI:
             db.add(job)
             db.commit()
             enqueue_job(job_id)
-            out.append(UploadResponse(job_id=job_id, status=job.status.value, collection_id=collection_id))
-        return BatchUploadResponse(jobs=out, collection_id=collection_id, message=f"uploaded {len(out)} file(s)")
+            out.append(
+                UploadResponse(
+                    job_id=job_id,
+                    status=job.status.value,
+                    collection_id=collection_id,
+                    channel_id=channel.id,
+                    channel_name=channel.name,
+                    suggested_channel_name=suggested,
+                    suggestion_confidence=conf,
+                )
+            )
+        return BatchUploadResponse(
+            jobs=out,
+            collection_id=collection_id,
+            channel_id=channel.id,
+            channel_name=channel.name,
+            suggested_channel_name=suggested,
+            suggestion_confidence=conf,
+            message=f"uploaded {len(out)} file(s)",
+        )
 
     @app.get("/api/collections/{collection_id}/summary", response_model=CollectionSummaryOut)
     def get_collection_summary(collection_id: str, db: Session = Depends(get_db)) -> CollectionSummaryOut:
@@ -328,6 +428,113 @@ def create_app() -> FastAPI:
             processing_videos=processing,
             summary=summary,
         )
+
+    @app.get("/api/channels", response_model=ChannelListOut)
+    def list_channels(db: Session = Depends(get_db)) -> ChannelListOut:
+        channels = list(db.execute(select(Channel).order_by(Channel.created_at.desc())).scalars().all())
+        out: list[ChannelItemOut] = []
+        for ch in channels:
+            collections = list(
+                db.execute(select(Collection).where(Collection.channel_id == ch.id).order_by(Collection.created_at.desc()))
+                .scalars()
+                .all()
+            )
+            collection_ids = [c.id for c in collections]
+            videos = (
+                int(db.execute(select(func.count()).select_from(Job).where(Job.collection_id.in_(collection_ids))).scalar() or 0)
+                if collection_ids
+                else 0
+            )
+            out.append(
+                ChannelItemOut(
+                    id=ch.id,
+                    name=ch.name,
+                    collections=len(collections),
+                    videos=videos,
+                    latest_collection_id=collections[0].id if collections else "",
+                )
+            )
+        return ChannelListOut(channels=out)
+
+    @app.get("/api/channels/{channel_id}/collections", response_model=ChannelCollectionsOut)
+    def channel_collections(channel_id: str, db: Session = Depends(get_db)) -> ChannelCollectionsOut:
+        ch = db.get(Channel, channel_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="channel not found")
+        collections = list(
+            db.execute(select(Collection).where(Collection.channel_id == channel_id).order_by(Collection.created_at.desc()))
+            .scalars()
+            .all()
+        )
+        out: list[ChannelCollectionOut] = []
+        for c in collections:
+            jobs = list(db.execute(select(Job).where(Job.collection_id == c.id)).scalars().all())
+            total = len(jobs)
+            completed = len([j for j in jobs if j.status == JobStatus.completed])
+            failed = len([j for j in jobs if j.status == JobStatus.failed])
+            out.append(
+                ChannelCollectionOut(
+                    collection_id=c.id,
+                    title=c.title or "",
+                    created_at=c.created_at,
+                    total_videos=total,
+                    completed_videos=completed,
+                    failed_videos=failed,
+                )
+            )
+        return ChannelCollectionsOut(channel_id=ch.id, channel_name=ch.name, collections=out)
+
+    @app.patch("/api/channels/{channel_id}", response_model=ChannelItemOut)
+    def rename_channel(channel_id: str, payload: ChannelRenameIn, db: Session = Depends(get_db)) -> ChannelItemOut:
+        ch = db.get(Channel, channel_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="channel not found")
+        new_name = (payload.name or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="channel name is required")
+        exists = db.execute(
+            select(Channel).where(func.lower(Channel.name) == new_name.lower(), Channel.id != channel_id)
+        ).scalar_one_or_none()
+        if exists:
+            raise HTTPException(status_code=409, detail="channel name already exists")
+        ch.name = new_name
+        db.commit()
+        collections = list(db.execute(select(Collection).where(Collection.channel_id == ch.id)).scalars().all())
+        collection_ids = [c.id for c in collections]
+        videos = (
+            int(db.execute(select(func.count()).select_from(Job).where(Job.collection_id.in_(collection_ids))).scalar() or 0)
+            if collection_ids
+            else 0
+        )
+        latest = (
+            db.execute(select(Collection).where(Collection.channel_id == ch.id).order_by(Collection.created_at.desc()))
+            .scalars()
+            .first()
+        )
+        return ChannelItemOut(
+            id=ch.id,
+            name=ch.name,
+            collections=len(collections),
+            videos=videos,
+            latest_collection_id=latest.id if latest else "",
+        )
+
+    @app.delete("/api/channels/{channel_id}")
+    def delete_channel(channel_id: str, db: Session = Depends(get_db)) -> dict:
+        ch = db.get(Channel, channel_id)
+        if not ch:
+            raise HTTPException(status_code=404, detail="channel not found")
+        collections = list(db.execute(select(Collection).where(Collection.channel_id == channel_id)).scalars().all())
+        collection_ids = [c.id for c in collections]
+        if collection_ids:
+            jobs = list(db.execute(select(Job).where(Job.collection_id.in_(collection_ids))).scalars().all())
+            for j in jobs:
+                db.delete(j)
+            for c in collections:
+                db.delete(c)
+        db.delete(ch)
+        db.commit()
+        return {"ok": True, "deleted_channel_id": channel_id}
 
     @app.get("/api/jobs/{job_id}", response_model=JobCreateResponse)
     def get_job(job_id: str, db: Session = Depends(get_db)) -> JobCreateResponse:

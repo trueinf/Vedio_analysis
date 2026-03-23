@@ -33,6 +33,26 @@ def ensure_agent_tables(engine: Engine) -> None:
         with engine.begin() as c:
             c.execute(
                 text(
+                    "CREATE TABLE IF NOT EXISTS channels ("
+                    "id VARCHAR(36) PRIMARY KEY,"
+                    "created_at DATETIME NOT NULL,"
+                    "name VARCHAR(256) NOT NULL UNIQUE"
+                    ")"
+                )
+            )
+            c.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS collections ("
+                    "id VARCHAR(36) PRIMARY KEY,"
+                    "created_at DATETIME NOT NULL,"
+                    "channel_id VARCHAR(36) NOT NULL,"
+                    "title VARCHAR(256) NOT NULL DEFAULT '',"
+                    "FOREIGN KEY(channel_id) REFERENCES channels(id)"
+                    ")"
+                )
+            )
+            c.execute(
+                text(
                     "CREATE TABLE IF NOT EXISTS videos ("
                     "id VARCHAR(36) PRIMARY KEY,"
                     "created_at DATETIME NOT NULL,"

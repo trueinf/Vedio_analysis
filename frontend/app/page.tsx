@@ -1,7 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { getCollectionSummary, getJob, getResult, uploadVideo, uploadVideos } from "../lib/api";
+import {
+  ChannelCollection,
+  ChannelItem,
+  deleteChannel,
+  getChannelCollections,
+  getCollectionSummary,
+  getJob,
+  getResult,
+  listChannels,
+  renameChannel,
+  uploadVideo,
+  uploadVideos,
+} from "../lib/api";
 import { Button, Card } from "../components/ui";
 import { Gauge } from "../components/gauge";
 
@@ -80,6 +92,13 @@ export default function Page() {
   const [loadedResultJobId, setLoadedResultJobId] = useState<string | null>(null);
   const [collectionId, setCollectionId] = useState<string>("");
   const [collectionSummary, setCollectionSummary] = useState<CollectionSummary | null>(null);
+  const [channelName, setChannelName] = useState<string>("");
+  const [channelSearch, setChannelSearch] = useState<string>("");
+  const [channelViewMode, setChannelViewMode] = useState<"latest" | "all">("latest");
+  const [renameDraft, setRenameDraft] = useState<string>("");
+  const [channels, setChannels] = useState<ChannelItem[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("");
+  const [channelCollections, setChannelCollections] = useState<Record<string, ChannelCollection[]>>({});
   const [busy, setBusy] = useState(false);
 
   async function startUpload() {
@@ -91,8 +110,9 @@ export default function Page() {
     try {
       const newRows: UploadJobRow[] = [];
       if (batch.length > 1) {
-        const resp = await uploadVideos(batch);
+        const resp = await uploadVideos(batch, channelName);
         if (resp.collection_id) setCollectionId(resp.collection_id);
+        if (resp.channel_name && !channelName.trim()) setChannelName(resp.channel_name);
         setCollectionSummary(null);
         resp.jobs.forEach((u, idx) => {
           const f = batch[idx];
@@ -106,8 +126,9 @@ export default function Page() {
           });
         });
       } else {
-        const u = await uploadVideo(batch[0]);
+        const u = await uploadVideo(batch[0], channelName);
         if (u.collection_id) setCollectionId(u.collection_id);
+        if (u.channel_name && !channelName.trim()) setChannelName(u.channel_name);
         setCollectionSummary(null);
         newRows.push({
           id: u.job_id,
@@ -124,10 +145,33 @@ export default function Page() {
         setStage("queued");
         setProgress(0);
       }
+      await loadChannels();
     } catch (e: any) {
       setJobError(e?.message ?? "Upload failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadChannels() {
+    try {
+      const res = await listChannels();
+      setChannels(res.channels || []);
+      if (!selectedChannelId && (res.channels || []).length) {
+        setSelectedChannelId(res.channels[0].id);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function loadCollectionsForChannel(channelId: string) {
+    if (!channelId) return;
+    try {
+      const res = await getChannelCollections(channelId);
+      setChannelCollections((prev) => ({ ...prev, [channelId]: res.collections || [] }));
+    } catch {
+      // ignore
     }
   }
 
@@ -205,12 +249,24 @@ export default function Page() {
           // ignore transient summary fetch failures while jobs are in progress
         }
       }
+      await loadChannels();
     } catch (e: any) {
       setJobError(e?.message ?? "Refresh failed");
     } finally {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    loadChannels().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedChannelId) return;
+    loadCollectionsForChannel(selectedChannelId).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannelId]);
 
   useEffect(() => {
     const activeCount = uploadedJobs.filter((j) => j.status === "queued" || j.status === "processing").length;
@@ -273,6 +329,13 @@ export default function Page() {
       ],
     };
   }, [result]);
+  const activeChannelName =
+    channels.find((c) => c.id === selectedChannelId)?.name ||
+    channelName ||
+    "Creator";
+  const visibleChannels = channels.filter((c) =>
+    c.name.toLowerCase().includes(channelSearch.trim().toLowerCase())
+  );
 
   return (
     <div className="min-h-screen">
@@ -292,7 +355,7 @@ export default function Page() {
         </div>
 
         <div className="mt-6 grid grid-cols-12 gap-5">
-          <Card className="col-span-12 lg:col-span-7 p-4">
+          <Card className="col-span-12 lg:col-span-6 p-4">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold">Video</div>
               {jobId ? <div className="text-xs text-muted">Job: {jobId}</div> : null}
@@ -301,6 +364,13 @@ export default function Page() {
               Video preview will appear here (optional)
             </div>
             <div className="mt-4 flex items-center gap-3 flex-wrap">
+              <input
+                type="text"
+                value={channelName}
+                onChange={(e) => setChannelName(e.target.value)}
+                placeholder="Channel name (e.g. ifan)"
+                className="text-sm border border-black/10 rounded-md px-2 py-1"
+              />
               <input
                 type="file"
                 accept="video/*"
@@ -384,7 +454,7 @@ export default function Page() {
             ) : null}
           </Card>
 
-          <div className="col-span-12 lg:col-span-5 grid gap-5">
+          <div className="col-span-12 lg:col-span-3 grid gap-5">
             <Card className="p-4">
               <div className="text-sm font-semibold">Overall Score</div>
               <div className="mt-2 flex items-center justify-between">
@@ -420,6 +490,139 @@ export default function Page() {
               </div>
             </Card>
           </div>
+
+          <Card className="col-span-12 lg:col-span-3 p-4">
+            <div className="text-sm font-semibold">Channel Reports</div>
+            <div className="text-xs text-muted mt-1">Stored analyses by channel</div>
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                type="text"
+                value={channelSearch}
+                onChange={(e) => setChannelSearch(e.target.value)}
+                placeholder="Search channels"
+                className="w-full text-xs border border-black/10 rounded-md px-2 py-1"
+              />
+            </div>
+            <div className="mt-2 flex gap-2 text-xs">
+              <button
+                type="button"
+                className={`px-2 py-1 rounded border ${channelViewMode === "latest" ? "bg-blue-50 border-blue-200" : "border-black/10"}`}
+                onClick={() => setChannelViewMode("latest")}
+              >
+                Latest
+              </button>
+              <button
+                type="button"
+                className={`px-2 py-1 rounded border ${channelViewMode === "all" ? "bg-blue-50 border-blue-200" : "border-black/10"}`}
+                onClick={() => setChannelViewMode("all")}
+              >
+                All-time
+              </button>
+            </div>
+            <div className="mt-3 space-y-2 max-h-80 overflow-auto">
+              {visibleChannels.length ? (
+                visibleChannels.map((ch) => (
+                  <div key={ch.id} className="border border-black/5 rounded-md">
+                    <button
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-xs ${selectedChannelId === ch.id ? "bg-blue-50" : ""}`}
+                      onClick={() => {
+                        setSelectedChannelId(ch.id);
+                        setRenameDraft(ch.name);
+                      }}
+                    >
+                      <div className="font-medium">{ch.name}</div>
+                      <div className="text-muted">
+                        {ch.collections} collections · {ch.videos} videos
+                      </div>
+                    </button>
+                    {selectedChannelId === ch.id ? (
+                      <div className="px-3 pb-2">
+                        <div className="mt-1 flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            placeholder="Rename channel"
+                            className="w-full text-[11px] border border-black/10 rounded px-2 py-1"
+                          />
+                          <button
+                            type="button"
+                            className="text-[11px] px-2 py-1 rounded border border-black/10 hover:bg-slate-50"
+                            onClick={async () => {
+                              const next = renameDraft.trim();
+                              if (!next) return;
+                              try {
+                                await renameChannel(ch.id, next);
+                                await loadChannels();
+                                setChannelName(next);
+                                setRenameDraft("");
+                              } catch {
+                                // ignore
+                              }
+                            }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="text-[11px] px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              try {
+                                await deleteChannel(ch.id);
+                                setSelectedChannelId("");
+                                setCollectionSummary(null);
+                                await loadChannels();
+                              } catch {
+                                // ignore
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                        <div className="text-[11px] text-muted mb-1 mt-2">Collections</div>
+                        <div className="space-y-1 max-h-28 overflow-auto">
+                          {(channelViewMode === "latest"
+                            ? (channelCollections[ch.id] || []).slice(0, 1)
+                            : channelCollections[ch.id] || []
+                          ).map((c) => (
+                            <button
+                              key={c.collection_id}
+                              type="button"
+                              className="w-full text-left text-[11px] border border-black/5 rounded px-2 py-1 hover:bg-slate-50"
+                              onClick={async () => {
+                                setCollectionId(c.collection_id);
+                                try {
+                                  const cs = (await getCollectionSummary(c.collection_id)) as CollectionSummary;
+                                  setCollectionSummary(cs);
+                                  if (cs.summary.best_video) {
+                                    setJobId(cs.summary.best_video);
+                                  }
+                                } catch {
+                                  // ignore
+                                }
+                              }}
+                            >
+                              <div className="font-medium truncate">{c.title || c.collection_id}</div>
+                              <div className="text-muted">
+                                {c.completed_videos}/{c.total_videos} completed
+                              </div>
+                            </button>
+                          ))}
+                          {!(channelCollections[ch.id] || []).length ? (
+                            <div className="text-[11px] text-muted">No collections yet.</div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <div className="text-xs text-muted">No channel reports found.</div>
+              )}
+            </div>
+          </Card>
 
           <div className="col-span-12 grid grid-cols-1 md:grid-cols-4 gap-5">
             <StatCard
@@ -666,7 +869,7 @@ export default function Page() {
           {collectionSummary ? (
             <Card className="col-span-12 p-4">
               <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">Overall Across Uploaded Videos</div>
+                <div className="text-sm font-semibold">{labelCase(activeChannelName)}'s Overall Analysis</div>
                 <div className="text-xs">
                   {collectionSummary.processing_videos === 0 ? (
                     <span className="px-2 py-1 rounded bg-green-100 text-green-700">

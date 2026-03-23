@@ -36,12 +36,20 @@ class UploadResponse(BaseModel):
     job_id: str
     status: JobStatus
     collection_id: str = ""
+    channel_id: str = ""
+    channel_name: str = ""
+    suggested_channel_name: str = ""
+    suggestion_confidence: str = "low"
     message: str = Field(default="uploaded")
 
 
 class BatchUploadResponse(BaseModel):
     jobs: list[UploadResponse]
     collection_id: str = ""
+    channel_id: str = ""
+    channel_name: str = ""
+    suggested_channel_name: str = ""
+    suggestion_confidence: str = "low"
     message: str = Field(default="uploaded")
 
 
@@ -52,4 +60,35 @@ class CollectionSummaryOut(BaseModel):
     failed_videos: int
     processing_videos: int
     summary: dict[str, Any]
+
+
+class ChannelItemOut(BaseModel):
+    id: str
+    name: str
+    collections: int = 0
+    videos: int = 0
+    latest_collection_id: str = ""
+
+
+class ChannelListOut(BaseModel):
+    channels: list[ChannelItemOut]
+
+
+class ChannelCollectionOut(BaseModel):
+    collection_id: str
+    title: str
+    created_at: datetime
+    total_videos: int
+    completed_videos: int
+    failed_videos: int
+
+
+class ChannelCollectionsOut(BaseModel):
+    channel_id: str
+    channel_name: str
+    collections: list[ChannelCollectionOut]
+
+
+class ChannelRenameIn(BaseModel):
+    name: str
 
