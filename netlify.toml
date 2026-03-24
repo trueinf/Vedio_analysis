@@ -3,6 +3,8 @@
   # If publish is set to "frontend" (same as base), deploys fail.
   base = "frontend"
   command = "npm run build"
+  # Explicitly avoid publish==base for Netlify runtime validation.
+  publish = ".next"
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
