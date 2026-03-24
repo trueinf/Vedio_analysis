@@ -22,5 +22,6 @@ class VisionAgent:
             gestures=vm.gestures,
             quality=vm.quality,
             timeline_bins=vm.timeline_bins or [],
+            metric_events=vm.metric_events or [],
         )
 

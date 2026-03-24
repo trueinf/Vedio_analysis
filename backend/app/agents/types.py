@@ -17,6 +17,7 @@ class SpeechAgentOutput:
     fillers: dict[str, Any]
     tonal_variation: dict[str, Any]
     timeline_bins: list[dict[str, Any]]
+    metric_events: list[dict[str, Any]]
 
 
 @dataclass
@@ -26,6 +27,7 @@ class VisionAgentOutput:
     gestures: dict[str, Any]
     quality: dict[str, Any]
     timeline_bins: list[dict[str, Any]]
+    metric_events: list[dict[str, Any]]
 
 
 @dataclass

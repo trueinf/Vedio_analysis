@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     uploads_dir: str = "data/uploads"
     artifacts_dir: str = "data/artifacts"
     results_dir: str = "data/results"
+    clips_dir: str = "data/clips"
     models_dir: str = "data/models"
     db_url: str = "sqlite:///./data/app.db"
 

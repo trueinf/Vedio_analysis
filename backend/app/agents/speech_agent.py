@@ -36,5 +36,6 @@ class SpeechAgent:
             fillers=audio.fillers,
             tonal_variation=audio.prosody,
             timeline_bins=audio.timeline_bins,
+            metric_events=getattr(audio, "metric_events", []),
         )
 

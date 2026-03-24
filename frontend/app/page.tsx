@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ChannelCollection,
   ChannelItem,
@@ -14,8 +16,21 @@ import {
   uploadVideo,
   uploadVideos,
 } from "../lib/api";
-import { Button, Card } from "../components/ui";
-import { Gauge } from "../components/gauge";
+import {
+  Button,
+  Card,
+} from "../components/ui";
+import { DemoOverlay } from "../components/DemoOverlay";
+import { ChannelReportsPanel } from "../components/ChannelReportsPanel";
+import { VideoUploadPanel } from "../components/VideoUploadPanel";
+import { InsightsSummaryPanel } from "../components/InsightsSummaryPanel";
+import { MetricsGrid } from "../components/MetricsGrid";
+import { MetricEvent, MetricKey } from "../components/video-analysis-types";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const MultiMetricTimeline = dynamic(() => import("../components/MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
+const WorstMomentsPanel = dynamic(() => import("../components/WorstMomentsPanel").then((m) => m.WorstMomentsPanel));
+const ClipsPanel = dynamic(() => import("../components/ClipsPanel").then((m) => m.ClipsPanel));
+const CoachPanel = dynamic(() => import("../components/CoachPanel").then((m) => m.CoachPanel));
 
 type UploadJobRow = {
   id: string;
@@ -53,32 +68,6 @@ function labelCase(s: string): string {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function StatCard(props: {
-  title: string;
-  subtitle: string;
-  value: string;
-  badge: { text: string; tone: "good" | "warn" | "bad" | "neutral" };
-}) {
-  const tone =
-    props.badge.tone === "good"
-      ? "bg-green-100 text-green-700"
-      : props.badge.tone === "warn"
-      ? "bg-amber-100 text-amber-700"
-      : props.badge.tone === "bad"
-      ? "bg-red-100 text-red-700"
-      : "bg-slate-100 text-slate-700";
-  return (
-    <Card className="p-4 h-full">
-      <div className="text-sm font-semibold">{props.title}</div>
-      <div className="text-xs text-muted mt-0.5">{props.subtitle}</div>
-      <div className="mt-3 flex items-end justify-between">
-        <div className="text-3xl font-semibold leading-none">{props.value}</div>
-        <div className={`text-xs px-2 py-1 rounded-md ${tone}`}>{props.badge.text}</div>
-      </div>
-    </Card>
-  );
-}
-
 export default function Page() {
   const [file, setFile] = useState<File | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -100,6 +89,78 @@ export default function Page() {
   const [selectedChannelId, setSelectedChannelId] = useState<string>("");
   const [channelCollections, setChannelCollections] = useState<Record<string, ChannelCollection[]>>({});
   const [busy, setBusy] = useState(false);
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
+  const [activeEvent, setActiveEvent] = useState<MetricEvent | null>(null);
+  const [isMomentPanelOpen, setIsMomentPanelOpen] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [clipPreviewUrl, setClipPreviewUrl] = useState<string>("");
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoStarted, setDemoStarted] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [demoSpotlight, setDemoSpotlight] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  const [demoMetricValue, setDemoMetricValue] = useState(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  const demoSteps = useMemo(
+    () => [
+      {
+        id: "problem",
+        title: "Problem",
+        description: "Most creators do not know where they lose viewer engagement.",
+        focusId: "demo-problem",
+      },
+      {
+        id: "solution",
+        title: "Solution",
+        description: "AI analysis transforms raw video into measurable delivery insights.",
+        focusId: "demo-solution",
+      },
+      {
+        id: "metrics",
+        title: "Metrics",
+        description: "Speech, eye contact, fillers, tone, expressions, and gestures are scored in one dashboard.",
+        focusId: "demo-metrics",
+      },
+      {
+        id: "timeline",
+        title: "Timeline Insights",
+        description: "Interactive timeline pinpoints exactly when delivery quality shifts.",
+        focusId: "demo-timeline",
+      },
+      {
+        id: "moments",
+        title: "Moments",
+        description: "Clickable moments jump straight to critical timestamps in the video.",
+        focusId: "demo-moments",
+      },
+      {
+        id: "worst",
+        title: "Worst Moments",
+        description: "Top negative segments are auto-detected to prioritize coaching effort.",
+        focusId: "demo-worst",
+      },
+      {
+        id: "coach",
+        title: "AI Coaching",
+        description: "Actionable comments are generated for each timestamped issue.",
+        focusId: "demo-coach",
+      },
+      {
+        id: "clips",
+        title: "Clips",
+        description: "Auto-generated clips package moments for review and team feedback.",
+        focusId: "demo-clips",
+      },
+      {
+        id: "value",
+        title: "Final Value",
+        description: "A repeatable coaching loop that improves performance video over video.",
+        focusId: "demo-value",
+      },
+    ],
+    []
+  );
 
   async function startUpload() {
     const batch = files.length ? files : file ? [file] : [];
@@ -153,7 +214,7 @@ export default function Page() {
     }
   }
 
-  async function loadChannels() {
+  const loadChannels = useCallback(async () => {
     try {
       const res = await listChannels();
       setChannels(res.channels || []);
@@ -163,9 +224,9 @@ export default function Page() {
     } catch {
       // ignore
     }
-  }
+  }, [selectedChannelId]);
 
-  async function loadCollectionsForChannel(channelId: string) {
+  const loadCollectionsForChannel = useCallback(async (channelId: string) => {
     if (!channelId) return;
     try {
       const res = await getChannelCollections(channelId);
@@ -173,9 +234,9 @@ export default function Page() {
     } catch {
       // ignore
     }
-  }
+  }, []);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!jobId && !uploadedJobs.length) return;
     setBusy(true);
     setJobError("");
@@ -255,18 +316,16 @@ export default function Page() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [jobId, uploadedJobs, loadedResultJobId, collectionId, loadChannels]);
 
   useEffect(() => {
     loadChannels().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadChannels]);
 
   useEffect(() => {
     if (!selectedChannelId) return;
     loadCollectionsForChannel(selectedChannelId).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChannelId]);
+  }, [selectedChannelId, loadCollectionsForChannel]);
 
   useEffect(() => {
     const activeCount = uploadedJobs.filter((j) => j.status === "queued" || j.status === "processing").length;
@@ -277,8 +336,7 @@ export default function Page() {
       refresh().catch(() => {});
     }, intervalMs);
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, status, uploadedJobs]);
+  }, [jobId, status, uploadedJobs, refresh]);
 
   const cards = useMemo(() => {
     const s = result?.summary ?? {};
@@ -314,7 +372,16 @@ export default function Page() {
       exprChangesPerMin,
       exprBadge,
       timeline: result?.timeline ?? { bin_size_sec: 60, bins: [] },
-      events: (result?.events ?? []) as { t0: number; type: string; message?: string }[],
+      events: (result?.events ?? []) as {
+        metric?: string;
+        label?: string;
+        t0: number;
+        t1?: number;
+        value?: number;
+        note?: string;
+        type?: string;
+        message?: string;
+      }[],
       durationSec,
       tips: result?.tips ?? [
         "Reduce filler words.",
@@ -327,473 +394,447 @@ export default function Page() {
         "Vary your tone during key points.",
         "Increase eye contact with the camera.",
       ],
+      worstMoments: (result?.worst_moments ?? []) as { t0: number; t1: number; reason: string }[],
+      clips: (result?.clips ?? []) as { t0: number; t1: number; url: string }[],
+      coachComments: (result?.coach_comments ?? []) as { t0: number; comment: string }[],
     };
   }, [result]);
+  const allEvents = useMemo(() => (result?.events ?? []) as MetricEvent[], [result?.events]);
+  const filteredEvents = useMemo(
+    () =>
+      (selectedMetric ? allEvents.filter((e) => String(e.metric || e.type) === selectedMetric) : allEvents).sort(
+        (a, b) => Number(a.t0 || 0) - Number(b.t0 || 0)
+      ),
+    [allEvents, selectedMetric]
+  );
+  const activeTimelineEvent = useMemo(
+    () =>
+      filteredEvents.find((e) => {
+        const t0 = Number(e.t0 || 0);
+        const t1 = Number(e.t1 ?? e.t0 ?? 0);
+        return t0 <= currentTime && currentTime <= Math.max(t0, t1);
+      }) ?? null,
+    [filteredEvents, currentTime]
+  );
   const activeChannelName =
-    channels.find((c) => c.id === selectedChannelId)?.name ||
-    channelName ||
-    "Creator";
+    channels.find((c) => c.id === selectedChannelId)?.name || channelName || "Creator";
   const visibleChannels = channels.filter((c) =>
     c.name.toLowerCase().includes(channelSearch.trim().toLowerCase())
   );
+  const localVideoUrl = useMemo(() => {
+    const pick = file ?? files[0] ?? null;
+    return pick ? URL.createObjectURL(pick) : "";
+  }, [file, files]);
+
+  useEffect(() => {
+    return () => {
+      if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+    };
+  }, [localVideoUrl]);
+
+  useEffect(() => {
+    if (activeTimelineEvent) setActiveEvent(activeTimelineEvent);
+  }, [activeTimelineEvent]);
+
+  useEffect(() => {
+    if (!demoMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight") setCurrentStep((s) => Math.min(demoSteps.length - 1, s + 1));
+      if (e.key === "ArrowLeft") setCurrentStep((s) => Math.max(0, s - 1));
+      if (e.key === "Escape") setDemoMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [demoMode, demoSteps.length]);
+
+  useEffect(() => {
+    if (!demoMode) return;
+    const focusId = demoSteps[currentStep]?.focusId;
+    const update = () => {
+      if (!focusId) return setDemoSpotlight(null);
+      const el = document.getElementById(focusId);
+      if (!el) return setDemoSpotlight(null);
+      const r = el.getBoundingClientRect();
+      setDemoSpotlight({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [demoMode, currentStep, demoSteps]);
+
+  useEffect(() => {
+    if (!demoMode) return;
+    const stepId = demoSteps[currentStep]?.id;
+    if (stepId === "metrics") {
+      setSelectedMetric("speech_rate");
+      setDemoMetricValue(0);
+      const t = setInterval(() => setDemoMetricValue((v) => (v >= 96 ? 96 : v + 6)), 40);
+      return () => clearInterval(t);
+    }
+    if (stepId === "timeline") {
+      setSelectedMetric("");
+      if (filteredEvents[0]) setActiveEvent(filteredEvents[0]);
+    }
+    if (stepId === "moments" || stepId === "worst") {
+      setIsMomentPanelOpen(true);
+      const wm = cards.worstMoments[0];
+      if (wm) {
+        setActiveEvent({ metric: "worst_moment", t0: wm.t0, t1: wm.t1, note: wm.reason });
+        seekTo(wm.t0, wm.t1);
+      }
+    }
+    if (stepId === "coach") {
+      setIsMomentPanelOpen(true);
+      const cc = cards.coachComments[0];
+      if (cc) seekTo(cc.t0);
+    }
+    if (stepId === "clips") {
+      setIsMomentPanelOpen(true);
+      const c = cards.clips[0];
+      if (c) {
+        setClipPreviewUrl(`${API_BASE}${c.url}`);
+        seekTo(c.t0, c.t1);
+      }
+    }
+  }, [demoMode, currentStep, demoSteps, filteredEvents, cards.worstMoments, cards.coachComments, cards.clips]);
+
+  async function exportDemoScreens() {
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const root = document.getElementById("demo-root");
+      if (!root) return;
+      for (let i = 0; i < demoSteps.length; i++) {
+        setCurrentStep(i);
+        await new Promise((r) => setTimeout(r, 350));
+        const canvas = await html2canvas(root, { backgroundColor: "#0f172a", scale: 1.5 });
+        const a = document.createElement("a");
+        a.download = `demo-step-${i + 1}-${demoSteps[i].id}.png`;
+        a.href = canvas.toDataURL("image/png");
+        a.click();
+      }
+    } catch {
+      // ignore optional export failures
+    }
+  }
+
+  const seekTo = (time: number, endTime?: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const t = Math.max(0, Number.isFinite(time) ? time : 0);
+    v.currentTime = t;
+    void v.play();
+    if (typeof endTime === "number" && endTime > t) {
+      const stopAt = endTime;
+      const stopHandler = () => {
+        if (v.currentTime >= stopAt) {
+          v.pause();
+          v.removeEventListener("timeupdate", stopHandler);
+        }
+      };
+      v.addEventListener("timeupdate", stopHandler);
+    }
+  };
+  const stepId = demoSteps[currentStep]?.id ?? "";
+  const stepMotion = useMemo(() => {
+    const byStep: Record<string, { initial: { opacity: number; y: number; scale: number }; duration: number }> = {
+      problem: { initial: { opacity: 0, y: 40, scale: 0.99 }, duration: 0.5 },
+      solution: { initial: { opacity: 0, y: 24, scale: 1.0 }, duration: 0.4 },
+      metrics: { initial: { opacity: 0, y: 18, scale: 0.985 }, duration: 0.35 },
+      timeline: { initial: { opacity: 0, y: 26, scale: 0.99 }, duration: 0.45 },
+      moments: { initial: { opacity: 0, y: 22, scale: 1.0 }, duration: 0.4 },
+      worst: { initial: { opacity: 0, y: 22, scale: 1.0 }, duration: 0.4 },
+      coach: { initial: { opacity: 0, y: 20, scale: 1.0 }, duration: 0.4 },
+      clips: { initial: { opacity: 0, y: 20, scale: 1.0 }, duration: 0.4 },
+      value: { initial: { opacity: 0, y: 34, scale: 0.99 }, duration: 0.55 },
+    };
+    return byStep[stepId] ?? { initial: { opacity: 0, y: 24, scale: 0.99 }, duration: 0.4 };
+  }, [stepId]);
+  const showProblemSlide = !demoMode || stepId === "problem" || stepId === "solution";
+  const showMetricsSlide = !demoMode || stepId === "metrics";
+  const showTimelineSlide = !demoMode || ["timeline", "moments", "worst", "coach", "clips"].includes(stepId);
+  const showValueSlide = !demoMode || stepId === "value";
 
   return (
-    <div className="min-h-screen">
-      <div className="max-w-6xl mx-auto px-6 py-6">
-        <div className="flex items-center justify-between">
+    <div id="demo-root" className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white">
+      <AnimatePresence>
+        {demoMode && !demoStarted ? (
+          <motion.div
+            key="demo-hero"
+            className="fixed inset-0 z-[70] bg-gradient-to-br from-slate-900 via-blue-900 to-slate-800 flex items-center justify-center px-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            <motion.div
+              className="text-center max-w-3xl"
+              initial={{ opacity: 0, y: 40, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+            >
+              <div className="text-5xl md:text-6xl font-bold tracking-tight text-white">AI Video Performance Analyzer</div>
+              <div className="mt-5 text-lg md:text-2xl text-slate-200">Turn communication into measurable intelligence</div>
+              <button
+                type="button"
+                className="mt-10 px-6 py-3 rounded-xl bg-cyan-400 text-slate-950 font-semibold hover:scale-105 transition-transform"
+                onClick={() => setDemoStarted(true)}
+              >
+                Start Demo
+              </button>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+      <motion.div
+        className="max-w-[96vw] mx-auto px-6 py-6 transition-all duration-500"
+        initial={false}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+      >
+        <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 backdrop-blur px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-primary rounded-lg flex items-center justify-center text-white font-semibold">
               ▶
             </div>
             <div>
-              <div className="font-semibold">AI Video Performance Analyzer</div>
-              <div className="text-xs text-muted">Upload one or many videos and get delivery insights</div>
+              <div className="font-semibold tracking-tight text-3xl">AI Video Performance Analyzer</div>
+              <div className="text-slate-300 text-sm">
+                Upload one or many videos and get delivery insights
+              </div>
             </div>
           </div>
 
-          <div className="text-sm text-muted">Dashboard</div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="premium-ghost"
+              onClick={() => {
+                if (demoMode) {
+                  setDemoMode(false);
+                  setDemoStarted(false);
+                } else {
+                  setDemoMode(true);
+                  setDemoStarted(false);
+                  setCurrentStep(0);
+                  setIsMomentPanelOpen(true);
+                }
+              }}
+            >
+              {demoMode ? "Exit Demo Mode" : "Enter Demo Mode"}
+            </Button>
+            <div className="text-slate-300">{demoMode ? "Presentation Mode" : "Dashboard"}</div>
+          </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-12 gap-5">
-          <Card className="col-span-12 lg:col-span-6 p-4 h-full">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Video</div>
-              {jobId ? <div className="text-xs text-muted">Job: {jobId}</div> : null}
-            </div>
-            <div className="mt-3 border border-black/5 rounded-xl overflow-hidden bg-black/5 aspect-video flex items-center justify-center text-muted text-sm">
-              Video preview will appear here (optional)
-            </div>
-            <div className="mt-4 flex items-center gap-3 flex-wrap">
-              <input
-                type="text"
-                value={channelName}
-                onChange={(e) => setChannelName(e.target.value)}
-                placeholder="Channel name (e.g. ifan)"
-                className="text-sm border border-black/10 rounded-md px-2 py-1"
-              />
-              <input
-                type="file"
-                accept="video/*"
-                multiple
-                onChange={(e) => {
-                  const picked = Array.from(e.target.files ?? []);
-                  setFiles(picked);
-                  setFile(picked[0] ?? null);
-                }}
-                className="text-sm"
-              />
-              <Button onClick={startUpload} disabled={!file || busy}>
-                Analyze
-              </Button>
-              <Button variant="ghost" onClick={refresh} disabled={(!jobId && !uploadedJobs.length) || busy}>
-                Refresh
-              </Button>
-              <div className="text-xs text-muted">
-                {files.length ? `${files.length} videos selected` : "Select one or more videos"}
-              </div>
-              <div className="text-sm text-muted">
-                Status: <span className="font-medium text-ink">{status || "-"}</span>
-              </div>
-              {status === "processing" || status === "queued" ? (
-                <div className="text-xs text-muted">
-                  Stage: <span className="font-medium text-ink">{stage || "-"}</span>{" "}
-                  {progress ? <span className="text-muted">({Math.round(progress * 100)}%)</span> : null}
-                </div>
-              ) : null}
-              {jobError ? <div className="text-sm text-bad">{jobError}</div> : null}
-            </div>
-            {uploadedJobs.length ? (
-              <div className="mt-4 border border-black/5 rounded-lg overflow-hidden">
-                <div className="max-h-44 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 text-slate-600">
-                      <tr>
-                        <th className="text-left px-2 py-2">Video</th>
-                        <th className="text-left px-2 py-2">Status</th>
-                        <th className="text-left px-2 py-2">Progress</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uploadedJobs.map((j) => (
-                        <tr
-                          key={j.id}
-                          className={`border-t cursor-pointer ${jobId === j.id ? "bg-blue-50" : ""}`}
-                          onClick={async () => {
-                            setJobId(j.id);
-                            setStatus(j.status);
-                            setStage(j.stage);
-                            setProgress(j.progress);
-                            if (j.status === "completed") {
-                              try {
-                                if (loadedResultJobId !== j.id) {
-                                  const r = await getResult(j.id);
-                                  setResult(r);
-                                  setLoadedResultJobId(j.id);
-                                }
-                              } catch {
-                                setResult(null);
-                                setLoadedResultJobId(null);
-                              }
-                            } else {
-                              setResult(null);
-                              setLoadedResultJobId(null);
-                            }
-                          }}
-                        >
-                          <td className="px-2 py-2 truncate max-w-[280px]" title={j.name}>
-                            {j.name}
-                          </td>
-                          <td className="px-2 py-2">{j.status}</td>
-                          <td className="px-2 py-2">{Math.round((j.progress || 0) * 100)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : null}
-          </Card>
-
-          <div className="col-span-12 lg:col-span-3 grid gap-5 h-full auto-rows-fr">
-            <Card className="p-4 h-full">
-              <div className="text-sm font-semibold">Overall Score</div>
-              <div className="mt-2 flex items-center justify-between">
-                <Gauge value={cards.score} label="Good" />
-                <div className="ml-2 flex-1">
-                  {cards.warnings?.length ? (
-                    <div className="mb-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      {cards.warnings[0]}
-                    </div>
-                  ) : null}
-                  <div className="text-sm font-semibold mb-2">Key Improvement Tips</div>
-                  <ul className="text-sm text-muted list-disc pl-5 space-y-1">
-                    {cards.tips.slice(0, 4).map((t: string, i: number) => (
-                      <li key={i}>{t}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </Card>
-
-            <Card className="p-4 h-full">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">AI Feedback</div>
-                <div className="text-xs text-muted">Suggestions</div>
-              </div>
-              <div className="mt-3 space-y-2 text-sm">
-                {cards.suggestions.slice(0, 3).map((s: string, i: number) => (
-                  <div key={i} className="flex gap-2">
-                    <div className="mt-1 w-2 h-2 rounded-full bg-primary" />
-                    <div className="text-muted">{s}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-
-          <Card className="col-span-12 lg:col-span-3 lg:row-span-2 p-4 h-full lg:ml-2">
-            <div className="text-sm font-semibold">Channel Reports</div>
-            <div className="text-xs text-muted mt-1">Stored analyses by channel</div>
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                type="text"
-                value={channelSearch}
-                onChange={(e) => setChannelSearch(e.target.value)}
-                placeholder="Search channels"
-                className="w-full text-xs border border-black/10 rounded-md px-2 py-1"
-              />
-            </div>
-            <div className="mt-2 flex gap-2 text-xs">
-              <button
-                type="button"
-                className={`px-2 py-1 rounded border ${channelViewMode === "latest" ? "bg-blue-50 border-blue-200" : "border-black/10"}`}
-                onClick={() => setChannelViewMode("latest")}
-              >
-                Latest
-              </button>
-              <button
-                type="button"
-                className={`px-2 py-1 rounded border ${channelViewMode === "all" ? "bg-blue-50 border-blue-200" : "border-black/10"}`}
-                onClick={() => setChannelViewMode("all")}
-              >
-                All-time
-              </button>
-            </div>
-            <div className="mt-3 space-y-2 max-h-[520px] overflow-auto pr-1">
-              {visibleChannels.length ? (
-                visibleChannels.map((ch) => (
-                  <div key={ch.id} className="border border-black/5 rounded-md bg-white">
-                    <button
-                      type="button"
-                      className={`w-full text-left px-3 py-2 text-xs ${selectedChannelId === ch.id ? "bg-blue-50" : ""}`}
-                      onClick={() => {
-                        setSelectedChannelId(ch.id);
-                        setRenameDraft(ch.name);
-                      }}
-                    >
-                      <div className="font-medium truncate">{ch.name}</div>
-                      <div className="text-muted">
-                        {ch.collections} collections · {ch.videos} videos
-                      </div>
-                    </button>
-                    {selectedChannelId === ch.id ? (
-                      <div className="px-3 pb-2">
-                        <div className="mt-1 flex items-center gap-1">
-                          <input
-                            type="text"
-                            value={renameDraft}
-                            onChange={(e) => setRenameDraft(e.target.value)}
-                            placeholder="Rename channel"
-                            className="w-full text-[11px] border border-black/10 rounded px-2 py-1 min-w-0"
-                          />
-                          <button
-                            type="button"
-                            className="text-[11px] px-2 py-1 rounded border border-black/10 hover:bg-slate-50 shrink-0"
-                            onClick={async () => {
-                              const next = renameDraft.trim();
-                              if (!next) return;
-                              try {
-                                await renameChannel(ch.id, next);
-                                await loadChannels();
-                                setChannelName(next);
-                                setRenameDraft("");
-                              } catch {
-                                // ignore
-                              }
-                            }}
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            className="text-[11px] px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50 shrink-0"
-                            onClick={async () => {
-                              try {
-                                await deleteChannel(ch.id);
-                                setSelectedChannelId("");
-                                setCollectionSummary(null);
-                                await loadChannels();
-                              } catch {
-                                // ignore
-                              }
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                        <div className="text-[11px] text-muted mb-1 mt-2">Collections</div>
-                        <div className="space-y-1 max-h-28 overflow-auto">
-                          {(channelViewMode === "latest"
-                            ? (channelCollections[ch.id] || []).slice(0, 1)
-                            : channelCollections[ch.id] || []
-                          ).map((c) => (
-                            <button
-                              key={c.collection_id}
-                              type="button"
-                              className="w-full text-left text-[11px] border border-black/5 rounded px-2 py-1 hover:bg-slate-50"
-                              onClick={async () => {
-                                setCollectionId(c.collection_id);
-                                try {
-                                  const cs = (await getCollectionSummary(c.collection_id)) as CollectionSummary;
-                                  setCollectionSummary(cs);
-                                  if (cs.summary.best_video) {
-                                    setJobId(cs.summary.best_video);
-                                  }
-                                } catch {
-                                  // ignore
-                                }
-                              }}
-                            >
-                              <div className="font-medium truncate">{c.title || c.collection_id}</div>
-                              <div className="text-muted">
-                                {c.completed_videos}/{c.total_videos} completed
-                              </div>
-                            </button>
-                          ))}
-                          {!(channelCollections[ch.id] || []).length ? (
-                            <div className="text-[11px] text-muted">No collections yet.</div>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ))
-              ) : (
-                <div className="text-xs text-muted">No channel reports found.</div>
-              )}
-            </div>
-          </Card>
-
-          <div className="col-span-12 grid grid-cols-1 md:grid-cols-4 gap-5 auto-rows-fr">
-            <StatCard
-              title="Speech Rate"
-              subtitle="Words Per Minute"
-              value={typeof cards.wpm === "number" ? `${Math.round(cards.wpm)} WPM` : `${cards.wpm}`}
-              badge={(() => {
-                const w = Number(cards.wpm);
-                if (!Number.isFinite(w)) return { text: "—", tone: "neutral" as const };
-                if (w < 95) return { text: "Slow", tone: "warn" as const };
-                if (w > 160) return { text: "Fast", tone: "warn" as const };
-                return { text: "Normal", tone: "good" as const };
-              })()}
-            />
-            <StatCard
-              title="Filler Words"
-              subtitle="Per Minute"
-              value={typeof cards.fillers === "number" ? `${cards.fillers.toFixed(1)}` : `${cards.fillers}`}
-              badge={(() => {
-                const f = Number(cards.fillers);
-                if (!Number.isFinite(f)) return { text: "—", tone: "neutral" as const };
-                if (f <= 2) return { text: "Low", tone: "good" as const };
-                if (f <= 5) return { text: "Moderate", tone: "warn" as const };
-                return { text: "High", tone: "bad" as const };
-              })()}
-            />
-            <StatCard
-              title="Eye Contact"
-              subtitle="On Camera Time"
-              value={typeof cards.eye === "number" ? `${Math.round(cards.eye * 100)}%` : `${cards.eye}`}
-              badge={(() => {
-                const e = Number(cards.eye);
-                if (!Number.isFinite(e) || e < 0) return { text: "—", tone: "neutral" as const };
-                const pct = e * 100;
-                if (pct >= 50) return { text: "Good", tone: "good" as const };
-                if (pct >= 30) return { text: "Decent", tone: "warn" as const };
-                return { text: "Low", tone: "bad" as const };
-              })()}
-            />
-            <StatCard
-              title="Gestures"
-              subtitle="Actions Per Minute"
-              value={typeof cards.gestures === "number" ? `${cards.gestures.toFixed(1)}` : `${cards.gestures}`}
-              badge={(() => {
-                const g = Number(cards.gestures);
-                if (!Number.isFinite(g)) return { text: "—", tone: "neutral" as const };
-                if (g < 4) return { text: "Low", tone: "warn" as const };
-                if (g <= 20) return { text: "Normal", tone: "good" as const };
-                return { text: "High", tone: "warn" as const };
-              })()}
-            />
-          </div>
-
-          <div className="col-span-12 grid grid-cols-1 md:grid-cols-2 gap-5 auto-rows-fr">
-            <StatCard
-              title="Tonal Variation"
-              subtitle="Pitch Variation (librosa)"
-              value={
-                cards.tonalScore != null && typeof cards.tonalScore === "number"
-                  ? cards.tonalScore.toFixed(1)
-                  : "N/A"
-              }
-              badge={(() => {
-                const label = cards.tonalLabel;
-                const text =
-                  label === "expressive"
-                    ? "Expressive"
-                    : label === "moderate"
-                      ? "Moderate"
-                      : label === "monotone"
-                        ? "Monotone"
-                        : label === "flat"
-                          ? "Flat"
-                          : label
-                            ? String(label).replace(/\b\w/g, (c) => c.toUpperCase())
-                            : "N/A";
-                const tone =
-                  label === "expressive"
-                    ? "good"
-                    : label === "moderate"
-                      ? "warn"
-                      : label === "monotone" || label === "flat"
-                        ? "bad"
-                        : "neutral";
-                return { text, tone: tone as "good" | "warn" | "bad" | "neutral" };
-              })()}
-            />
-            <StatCard
-              title="Expressions"
-              subtitle={cards.exprTop !== "-" ? `Changes/min · Top: ${cards.exprTop}` : "Changes Per Minute"}
-              value={Number.isFinite(cards.exprChangesPerMin) ? cards.exprChangesPerMin.toFixed(1) : "-"}
-              badge={{
-                text:
-                  cards.exprBadge === "low"
-                    ? "Low"
-                    : cards.exprBadge === "high"
-                      ? "High"
-                      : "Normal",
-                tone:
-                  cards.exprBadge === "normal"
-                    ? "good"
-                    : cards.exprBadge === "low"
-                      ? "warn"
-                      : "warn",
+        <motion.div
+          key={demoMode ? `demo-step-${currentStep}` : "normal-mode"}
+          className={`mt-6 grid grid-cols-12 gap-6 ${demoMode ? "min-h-[82vh] content-center" : ""}`}
+          initial={demoMode ? stepMotion.initial : false}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: stepMotion.duration, ease: "easeOut" }}
+        >
+          <div className={`col-span-12 lg:col-span-6 ${showProblemSlide ? "" : "hidden"}`}>
+            <VideoUploadPanel
+              jobId={jobId}
+              localVideoUrl={localVideoUrl}
+              demoMode={demoMode}
+              channelName={channelName}
+              onChannelNameChange={setChannelName}
+              onPickFiles={(picked) => {
+                setFiles(picked);
+                setFile(picked[0] ?? null);
               }}
+              onAnalyze={startUpload}
+              onRefresh={refresh}
+              canAnalyze={Boolean(file) && !busy}
+              canRefresh={Boolean(jobId || uploadedJobs.length) && !busy}
+              selectedFilesCount={files.length}
+              status={status}
+              stage={stage}
+              progress={progress}
+              jobError={jobError}
+              uploadedJobs={uploadedJobs}
+              activeJobId={jobId}
+              onSelectJob={async (nextJobId) => {
+                const j = uploadedJobs.find((x) => x.id === nextJobId);
+                if (!j) return;
+                setJobId(j.id);
+                setStatus(j.status);
+                setStage(j.stage);
+                setProgress(j.progress);
+                if (j.status === "completed") {
+                  try {
+                    if (loadedResultJobId !== j.id) {
+                      const r = await getResult(j.id);
+                      setResult(r);
+                      setLoadedResultJobId(j.id);
+                    }
+                  } catch {
+                    setResult(null);
+                    setLoadedResultJobId(null);
+                  }
+                } else {
+                  setResult(null);
+                  setLoadedResultJobId(null);
+                }
+              }}
+              setVideoRef={(el) => {
+                videoRef.current = el;
+              }}
+              onVideoLoadedMetadata={(duration) => setVideoDuration(duration)}
+              onVideoTimeUpdate={(time) => setCurrentTime(time)}
             />
           </div>
 
-          {cards.durationSec > 0 && (cards.timeline?.bins?.length > 0 || cards.events?.length > 0) ? (
-            <Card className="col-span-12 p-4">
-              <div className="text-sm font-semibold mb-2">Timeline</div>
-              <div className="text-xs text-muted mb-3">
-                Fillers, low eye contact, and pace warnings over time
-              </div>
-              <div className="relative h-10 rounded-lg overflow-hidden bg-slate-100 flex">
-                {(cards.timeline.bins as { t0: number; t1: number; fillers_per_min?: number; eye_contact?: number; wpm?: number }[]).map(
-                  (bin, i) => {
-                    const pct = (100 * (bin.t1 - bin.t0)) / cards.durationSec;
-                    const hasFillers = Number(bin.fillers_per_min) > 5;
-                    const lowEye = bin.eye_contact != null && bin.eye_contact < 0.5;
-                    const paceWarn =
-                      typeof bin.wpm === "number" && (bin.wpm > 200 || (bin.wpm > 0 && bin.wpm < 95));
-                    const color = hasFillers
-                      ? "bg-amber-400"
-                      : lowEye
-                        ? "bg-red-300"
-                        : paceWarn
-                          ? "bg-amber-200"
-                          : "bg-green-200";
-                    return (
-                      <div
-                        key={i}
-                        className={`${color} min-w-[2px] border-r border-white/50 last:border-0`}
-                        style={{ width: `${pct}%` }}
-                        title={`${Math.floor(bin.t0 / 60)}m–${Math.floor(bin.t1 / 60)}m`}
-                      />
-                    );
-                  }
-                )}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 rounded bg-amber-400" /> High fillers
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 rounded bg-red-300" /> Low eye contact
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 rounded bg-amber-200" /> Pace warning
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-3 h-3 rounded bg-green-200" /> OK
-                </span>
-              </div>
-              {cards.events?.length > 0 ? (
-                <div className="mt-3 pt-3 border-t border-black/5">
-                  <div className="text-xs font-medium text-muted mb-2">Events (first 10)</div>
-                  <ul className="text-xs text-muted space-y-1">
-                    {cards.events.slice(0, 10).map((ev, i) => (
-                      <li key={i}>
-                        {formatTime(ev.t0)} – {ev.type}: {ev.message ?? ev.type}
-                      </li>
-                    ))}
-                  </ul>
+          <InsightsSummaryPanel
+            show={showProblemSlide}
+            score={cards.score}
+            warnings={cards.warnings}
+            tips={cards.tips}
+            suggestions={cards.suggestions}
+          />
+
+          <ChannelReportsPanel
+            channelSearch={channelSearch}
+            onChannelSearchChange={setChannelSearch}
+            channelViewMode={channelViewMode}
+            onChannelViewModeChange={setChannelViewMode}
+            visibleChannels={visibleChannels}
+            selectedChannelId={selectedChannelId}
+            onSelectChannel={(channelId, channelNameValue) => {
+              setSelectedChannelId(channelId);
+              setRenameDraft(channelNameValue);
+            }}
+            renameDraft={renameDraft}
+            onRenameDraftChange={setRenameDraft}
+            channelCollections={channelCollections}
+            onRenameChannel={async (channelId) => {
+              const next = renameDraft.trim();
+              if (!next) return;
+              try {
+                await renameChannel(channelId, next);
+                await loadChannels();
+                setChannelName(next);
+                setRenameDraft("");
+              } catch {
+                // ignore
+              }
+            }}
+            onDeleteChannel={async (channelId) => {
+              try {
+                await deleteChannel(channelId);
+                setSelectedChannelId("");
+                setCollectionSummary(null);
+                await loadChannels();
+              } catch {
+                // ignore
+              }
+            }}
+            onSelectCollection={async (nextCollectionId) => {
+              setCollectionId(nextCollectionId);
+              try {
+                const cs = (await getCollectionSummary(nextCollectionId)) as CollectionSummary;
+                setCollectionSummary(cs);
+                if (cs.summary.best_video) {
+                  setJobId(cs.summary.best_video);
+                }
+              } catch {
+                // ignore
+              }
+            }}
+          />
+
+          <MetricsGrid
+            show={showMetricsSlide}
+            currentStepId={demoSteps[currentStep]?.id ?? ""}
+            demoMetricValue={demoMetricValue}
+            selectedMetric={selectedMetric}
+            onSelectMetric={(metric) => {
+              setSelectedMetric(metric);
+              setIsMomentPanelOpen(true);
+            }}
+            cards={{
+              wpm: cards.wpm,
+              fillers: cards.fillers,
+              eye: cards.eye,
+              gestures: cards.gestures,
+              tonalScore: cards.tonalScore,
+              tonalLabel: cards.tonalLabel,
+              exprTop: cards.exprTop,
+              exprChangesPerMin: cards.exprChangesPerMin,
+              exprBadge: cards.exprBadge,
+            }}
+          />
+
+          {cards.durationSec > 0 && cards.events?.length > 0 && showTimelineSlide ? (
+            <div id="demo-timeline" className="col-span-12 grid grid-cols-1 lg:grid-cols-12 gap-5">
+              <Card className="lg:col-span-8 p-4 rounded-xl shadow-sm transition-all duration-500 bg-white/5 border border-white/10 backdrop-blur text-white">
+                <MultiMetricTimeline
+                  events={filteredEvents}
+                  selectedMetric={selectedMetric}
+                  durationSec={Number(videoDuration || cards.durationSec || 0)}
+                  currentTime={currentTime}
+                  activeEvent={activeEvent}
+                  onSeek={(time, endTime) => seekTo(time, endTime)}
+                  onActiveEventChange={(ev) => setActiveEvent(ev)}
+                  cinematic={demoMode}
+                />
+              </Card>
+
+              {isMomentPanelOpen ? (
+                <motion.div
+                  id="demo-moments"
+                  className="lg:col-span-4 space-y-4"
+                  initial={{ opacity: 0, x: 28 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.4, ease: "easeOut" }}
+                >
+                <Card id="demo-worst" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
+                  <WorstMomentsPanel
+                    moments={cards.worstMoments}
+                    activeT0={activeEvent?.t0}
+                    onClose={() => setIsMomentPanelOpen(false)}
+                    onClickMoment={(t0, t1, reason) => {
+                      setActiveEvent({ metric: "worst_moment", t0, t1, note: reason });
+                      seekTo(t0, t1);
+                    }}
+                  />
+                </Card>
+                <Card id="demo-clips" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
+                  <ClipsPanel
+                    clips={cards.clips}
+                    clipPreviewUrl={clipPreviewUrl}
+                    onClickClip={(c) => {
+                      setClipPreviewUrl(`${API_BASE}${c.url}`);
+                      seekTo(Number(c.t0 || 0), Number(c.t1 || c.t0 || 0));
+                    }}
+                  />
+                </Card>
+                <Card id="demo-coach" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
+                  <CoachPanel comments={cards.coachComments} onClickComment={(t0) => seekTo(t0)} />
+                </Card>
+                </motion.div>
+              ) : null}
+            </div>
+          ) : null}
+          {result && showValueSlide ? (
+            <Card id="demo-value" className="col-span-12 p-4 bg-white/5 border border-white/10 backdrop-blur text-white">
+              <div className="text-sm font-semibold mb-3">Description View</div>
+              {demoMode ? (
+                <div className="mb-4 rounded-xl border border-cyan-300/30 bg-cyan-400/10 p-4">
+                  <div className="text-3xl font-bold">From feedback → to performance intelligence</div>
+                  <div className="text-slate-300 mt-1">Know exactly where you improve communication.</div>
+                  <button
+                    type="button"
+                    className="mt-4 px-4 py-2 rounded-lg bg-cyan-400 text-slate-950 font-semibold hover:scale-105 transition-transform"
+                    onClick={() => setDemoMode(false)}
+                  >
+                    Try Your Own Video
+                  </button>
                 </div>
               ) : null}
-            </Card>
-          ) : null}
-          {result ? (
-            <Card className="col-span-12 p-4">
-              <div className="text-sm font-semibold mb-3">Description View</div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[
                   {
@@ -866,10 +907,10 @@ export default function Page() {
               </div>
             </Card>
           ) : null}
-          {collectionSummary ? (
+          {collectionSummary && !demoMode ? (
             <Card className="col-span-12 p-4">
               <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">{labelCase(activeChannelName)}'s Overall Analysis</div>
+                <div className="text-sm font-semibold">{labelCase(activeChannelName)}&apos;s Overall Analysis</div>
                 <div className="text-xs">
                   {collectionSummary.processing_videos === 0 ? (
                     <span className="px-2 py-1 rounded bg-green-100 text-green-700">
@@ -1013,8 +1054,25 @@ export default function Page() {
               </div>
             </Card>
           ) : null}
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
+      {demoMode && demoStarted ? (
+        <DemoOverlay
+          step={demoSteps[currentStep]}
+          index={currentStep}
+          total={demoSteps.length}
+          spotlight={demoSpotlight}
+          onPrev={() => setCurrentStep((s) => Math.max(0, s - 1))}
+          onNext={() => setCurrentStep((s) => Math.min(demoSteps.length - 1, s + 1))}
+          onSkip={() => {
+            setDemoMode(false);
+            setDemoStarted(false);
+          }}
+          onExport={exportDemoScreens}
+          canPrev={currentStep > 0}
+          canNext={currentStep < demoSteps.length - 1}
+        />
+      ) : null}
     </div>
   );
 }

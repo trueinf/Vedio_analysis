@@ -32,11 +32,35 @@ class AudioMetrics:
     fillers: dict[str, Any]
     prosody: dict[str, Any]
     timeline_bins: list[dict[str, Any]]
+    metric_events: list[dict[str, Any]]
 
 
 def _count_words(text: str) -> int:
     tokens = re.findall(r"[A-Za-z']+", text)
     return len(tokens)
+
+
+def _norm_token(token: str) -> str:
+    return re.sub(r"[^a-zA-Z']", "", token).lower().strip()
+
+
+def _merge_nearby_events(events: list[dict[str, Any]], gap_sec: float = 1.0) -> list[dict[str, Any]]:
+    if not events:
+        return []
+    events = sorted(events, key=lambda e: (str(e.get("metric", "")), str(e.get("label", "")), float(e.get("t0", 0.0))))
+    out: list[dict[str, Any]] = []
+    cur = dict(events[0])
+    for e in events[1:]:
+        same_key = cur.get("metric") == e.get("metric") and cur.get("label") == e.get("label")
+        if same_key and float(e.get("t0", 0.0)) - float(cur.get("t1", 0.0)) <= gap_sec:
+            cur["t1"] = max(float(cur.get("t1", 0.0)), float(e.get("t1", 0.0)))
+            if cur.get("value") is None and e.get("value") is not None:
+                cur["value"] = e.get("value")
+            continue
+        out.append(cur)
+        cur = dict(e)
+    out.append(cur)
+    return out
 
 
 def _count_fillers(text: str) -> dict[str, Any]:
@@ -293,6 +317,110 @@ def transcribe_and_measure(
             }
         )
 
+    metric_events: list[dict[str, Any]] = []
+    # filler events from word timestamps
+    fillers_set = {f.lower() for f in FILLERS if " " not in f}
+    for i, w in enumerate(words_timed):
+        token = _norm_token(str(w.get("word", "")))
+        if token in fillers_set:
+            metric_events.append(
+                {
+                    "metric": "filler_words",
+                    "label": token,
+                    "t0": float(w.get("start", 0.0)),
+                    "t1": float(w.get("end", w.get("start", 0.0))),
+                    "value": 1.0,
+                    "note": f'Filler "{token}"',
+                    "type": "filler_words",
+                    "message": f'Filler "{token}"',
+                }
+            )
+        if i + 1 < len(words_timed):
+            two = f"{token} {_norm_token(str(words_timed[i + 1].get('word', '')))}".strip()
+            if two == "you know":
+                metric_events.append(
+                    {
+                        "metric": "filler_words",
+                        "label": "you know",
+                        "t0": float(w.get("start", 0.0)),
+                        "t1": float(words_timed[i + 1].get("end", words_timed[i + 1].get("start", 0.0))),
+                        "value": 1.0,
+                        "note": 'Filler "you know"',
+                        "type": "filler_words",
+                        "message": 'Filler "you know"',
+                    }
+                )
+
+    # speech rate events in 10-second bins
+    if seg_out:
+        sr_chunk = 10.0
+        max_t = max(float(s.get("end", 0.0)) for s in seg_out)
+        n = int(math.ceil(max_t / sr_chunk))
+        for i in range(n):
+            t0 = i * sr_chunk
+            t1 = min((i + 1) * sr_chunk, max_t)
+            if t1 <= t0:
+                continue
+            wc = 0
+            for w in words_timed:
+                wst = float(w.get("start", 0.0))
+                if t0 <= wst < t1:
+                    wc += 1
+            wpm_chunk = (wc / ((t1 - t0) / 60.0)) if (t1 - t0) > 0 else 0.0
+            label = "slow" if wpm_chunk < 95 else "fast" if wpm_chunk > 160 else "normal"
+            metric_events.append(
+                {
+                    "metric": "speech_rate",
+                    "label": label,
+                    "t0": float(t0),
+                    "t1": float(t1),
+                    "value": float(round(wpm_chunk, 2)),
+                    "note": f"Speech rate {label} (~{int(wpm_chunk)} WPM)",
+                    "type": "speech_rate",
+                    "message": f"Speech rate {label} (~{int(wpm_chunk)} WPM)",
+                }
+            )
+
+    # tonal variation events in 10-second chunks using pitch std
+    try:
+        with sf.SoundFile(wav_path) as f:
+            sr = int(f.samplerate)
+            total_sec = float(len(f)) / float(sr)
+            tonal_chunk = 10.0
+            for i in range(int(math.ceil(total_sec / tonal_chunk))):
+                t0 = i * tonal_chunk
+                t1 = min((i + 1) * tonal_chunk, total_sec)
+                if t1 <= t0:
+                    continue
+                f.seek(int(t0 * sr))
+                y = f.read(frames=int((t1 - t0) * sr), dtype="float32")
+                if y.ndim > 1:
+                    y = y.mean(axis=1)
+                if y.size < 256:
+                    continue
+                pitches, _ = librosa.piptrack(y=y, sr=sr)
+                pv = pitches[pitches > 0]
+                if pv.size == 0:
+                    continue
+                std = float(np.std(pv))
+                label = "monotone" if std < 20 else "expressive"
+                metric_events.append(
+                    {
+                        "metric": "tonal_variation",
+                        "label": label,
+                        "t0": float(t0),
+                        "t1": float(t1),
+                        "value": float(round(std, 2)),
+                        "note": f"Tonal variation {label} (std={std:.1f})",
+                        "type": "tonal_variation",
+                        "message": f"Tonal variation {label}",
+                    }
+                )
+    except Exception:
+        pass
+
+    metric_events = _merge_nearby_events(metric_events, gap_sec=0.8)
+
     return AudioMetrics(
         transcript=transcript,
         segments=seg_out,
@@ -305,5 +433,6 @@ def transcribe_and_measure(
         fillers={"per_minute": float(fillers_per_min), "count": int(fillers["total"]), "by_type": fillers["by_type"]},
         prosody=prosody,
         timeline_bins=timeline_bins,
+        metric_events=metric_events[:1000],
     )
 

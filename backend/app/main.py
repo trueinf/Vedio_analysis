@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.responses import ORJSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, text
@@ -250,6 +251,7 @@ def create_app() -> FastAPI:
     ensure_dir(settings.uploads_dir)
     ensure_dir(settings.artifacts_dir)
     ensure_dir(settings.results_dir)
+    ensure_dir(settings.clips_dir)
 
     app = FastAPI(default_response_class=ORJSONResponse, title=settings.app_name)
 
@@ -567,6 +569,16 @@ def create_app() -> FastAPI:
         data = Path(job.result_path).read_bytes()
         result = json.loads(data)
         return JobResultOut(job_id=job.id, result=result)
+
+    @app.get("/api/clips/{job_id}/{clip_name}")
+    def get_clip(job_id: str, clip_name: str) -> FileResponse:
+        safe = Path(clip_name).name
+        if not safe or safe != clip_name:
+            raise HTTPException(status_code=400, detail="invalid clip name")
+        clip_path = Path(settings.clips_dir) / job_id / safe
+        if not clip_path.exists() or not clip_path.is_file():
+            raise HTTPException(status_code=404, detail="clip not found")
+        return FileResponse(str(clip_path), media_type="video/mp4")
 
     @app.post("/api/jobs/{job_id}/retry", response_model=UploadResponse)
     def retry_job(job_id: str, db: Session = Depends(get_db)) -> UploadResponse:

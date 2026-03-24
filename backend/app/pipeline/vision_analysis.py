@@ -15,6 +15,24 @@ class VisionMetrics:
     gestures: dict[str, Any]
     quality: dict[str, Any]
     timeline_bins: list[dict[str, Any]] | None = None
+    metric_events: list[dict[str, Any]] | None = None
+
+
+def _merge_nearby_events(events: list[dict[str, Any]], gap_sec: float = 1.0) -> list[dict[str, Any]]:
+    if not events:
+        return []
+    events = sorted(events, key=lambda e: (str(e.get("metric", "")), str(e.get("label", "")), float(e.get("t0", 0.0))))
+    out: list[dict[str, Any]] = []
+    cur = dict(events[0])
+    for e in events[1:]:
+        same_key = cur.get("metric") == e.get("metric") and cur.get("label") == e.get("label")
+        if same_key and float(e.get("t0", 0.0)) - float(cur.get("t1", 0.0)) <= gap_sec:
+            cur["t1"] = max(float(cur.get("t1", 0.0)), float(e.get("t1", 0.0)))
+            continue
+        out.append(cur)
+        cur = dict(e)
+    out.append(cur)
+    return out
 
 
 def _head_pose_yaw_pitch(face_landmarks: np.ndarray) -> tuple[float, float]:
@@ -95,6 +113,9 @@ def analyze_video(
     expr_counts: dict[str, int] = {}
     expr_changes = 0
     prev_expr: str | None = None
+    eye_window_label: str | None = None
+    eye_window_t0: float | None = None
+    eye_window_last_t: float | None = None
 
     gesture_events = 0
     prev_wrist_px: tuple[float, float] | None = None
@@ -108,6 +129,7 @@ def analyze_video(
     total_seen = 0
     bin_size = 60.0
     bins: dict[int, dict[str, Any]] = {}
+    metric_events: list[dict[str, Any]] = []
     while True:
         ok, img = cap.read()
         if not ok:
@@ -153,12 +175,46 @@ def analyze_video(
             if abs(yaw) < 0.12 and abs(pitch) < 0.18:
                 on_camera += 1
                 b["on_camera"] += 1
+                eye_label = "good"
+            else:
+                eye_label = "low"
+
+            if eye_window_label is None:
+                eye_window_label = eye_label
+                eye_window_t0 = t_sec
+            elif eye_window_label != eye_label:
+                metric_events.append(
+                    {
+                        "metric": "eye_contact",
+                        "label": eye_window_label,
+                        "t0": float(eye_window_t0 or t_sec),
+                        "t1": float(eye_window_last_t or t_sec),
+                        "value": 1.0 if eye_window_label == "good" else 0.0,
+                        "note": f"Eye contact {eye_window_label}",
+                        "type": "eye_contact",
+                        "message": f"Eye contact {eye_window_label}",
+                    }
+                )
+                eye_window_label = eye_label
+                eye_window_t0 = t_sec
+            eye_window_last_t = t_sec
 
             expr = _expression_label(pts)
             expr_counts[expr] = expr_counts.get(expr, 0) + 1
             if prev_expr is not None and expr != prev_expr:
                 expr_changes += 1
                 b["expr_changes"] += 1
+                metric_events.append(
+                    {
+                        "metric": "expression_change",
+                        "label": f"{prev_expr}->{expr}",
+                        "t0": float(t_sec),
+                        "t1": float(t_sec + 0.25),
+                        "note": f"Expression change {prev_expr} to {expr}",
+                        "type": "expression_change",
+                        "message": f"Expression change {prev_expr} to {expr}",
+                    }
+                )
             prev_expr = expr
 
         ps = pose.process(rgb)
@@ -176,12 +232,37 @@ def analyze_video(
                     gesture_events += 1
                     b["gesture_events"] += 1
                     last_gesture_time = t_sec
+                    metric_events.append(
+                        {
+                            "metric": "gestures",
+                            "label": "beat/hand_motion",
+                            "t0": float(t_sec),
+                            "t1": float(t_sec + 0.4),
+                            "value": float(dist_px),
+                            "note": "Gesture detected",
+                            "type": "gestures",
+                            "message": "Gesture detected",
+                        }
+                    )
             prev_wrist_px = wrist_px
 
     cap.release()
 
     total = total_sampled
     face_visible_ratio = face_visible / total if total else 0.0
+    if eye_window_label is not None and eye_window_t0 is not None and eye_window_last_t is not None:
+        metric_events.append(
+            {
+                "metric": "eye_contact",
+                "label": eye_window_label,
+                "t0": float(eye_window_t0),
+                "t1": float(eye_window_last_t),
+                "value": 1.0 if eye_window_label == "good" else 0.0,
+                "note": f"Eye contact {eye_window_label}",
+                "type": "eye_contact",
+                "message": f"Eye contact {eye_window_label}",
+            }
+        )
 
     eye_contact = (
         {
@@ -216,5 +297,6 @@ def analyze_video(
         gestures=gestures,
         quality={"face_visible_ratio": face_visible_ratio, "sampled_frames": total},
         timeline_bins=[bins[k] for k in sorted(bins.keys())],
+        metric_events=_merge_nearby_events(metric_events, gap_sec=1.0)[:1000],
     )
 
