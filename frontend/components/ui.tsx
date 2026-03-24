@@ -1,9 +1,11 @@
 import { clsx } from "clsx";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
 
-export function Card(props: { className?: string; children: React.ReactNode }) {
+export function Card(props: ComponentPropsWithoutRef<"div"> & { children: ReactNode }) {
+  const { className, children, ...rest } = props;
   return (
-    <div className={clsx("bg-card rounded-xl2 shadow-soft border border-black/5", props.className)}>
-      {props.children}
+    <div {...rest} className={clsx("bg-card rounded-xl2 shadow-soft border border-black/5", className)}>
+      {children}
     </div>
   );
 }
