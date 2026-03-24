@@ -1,4 +1,6 @@
 [build]
+  # Next.js + Netlify plugin: keep publish directory empty in Netlify UI.
+  # If publish is set to "frontend" (same as base), deploys fail.
   base = "frontend"
   command = "npm run build"
 
