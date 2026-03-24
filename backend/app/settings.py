@@ -6,6 +6,8 @@ class Settings(BaseSettings):
 
     app_name: str = "AI Video Performance Analyzer"
     api_base_url: str = "http://localhost:8000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://vedioanalysis.netlify.app"
+    cors_origin_regex: str = r"^https://.*\.netlify\.app$"
 
     redis_url: str = "redis://localhost:6379/0"
 
