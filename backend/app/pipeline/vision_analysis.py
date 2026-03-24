@@ -127,7 +127,7 @@ def analyze_video(
 
     total_sampled = 0
     total_seen = 0
-    bin_size = 60.0
+    bin_size = 10.0
     bins: dict[int, dict[str, Any]] = {}
     metric_events: list[dict[str, Any]] = []
     while True:

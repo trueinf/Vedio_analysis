@@ -25,12 +25,14 @@ import { ChannelReportsPanel } from "../components/ChannelReportsPanel";
 import { VideoUploadPanel } from "../components/VideoUploadPanel";
 import { InsightsSummaryPanel } from "../components/InsightsSummaryPanel";
 import { MetricsGrid } from "../components/MetricsGrid";
+import { InsightsPanel } from "../components/InsightsPanel";
 import { MetricEvent, MetricKey } from "../components/video-analysis-types";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const MultiMetricTimeline = dynamic(() => import("../components/MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
 const WorstMomentsPanel = dynamic(() => import("../components/WorstMomentsPanel").then((m) => m.WorstMomentsPanel));
 const ClipsPanel = dynamic(() => import("../components/ClipsPanel").then((m) => m.ClipsPanel));
 const CoachPanel = dynamic(() => import("../components/CoachPanel").then((m) => m.CoachPanel));
+const BestMomentsPanel = dynamic(() => import("../components/BestMomentsPanel").then((m) => m.BestMomentsPanel));
 
 type UploadJobRow = {
   id: string;
@@ -397,6 +399,11 @@ export default function Page() {
       worstMoments: (result?.worst_moments ?? []) as { t0: number; t1: number; reason: string }[],
       clips: (result?.clips ?? []) as { t0: number; t1: number; url: string }[],
       coachComments: (result?.coach_comments ?? []) as { t0: number; comment: string }[],
+      engagementDrops: (result?.engagement_drops ?? []) as { t0: number; t1?: number; note?: string; value?: number }[],
+      confidenceScore: Number(result?.confidence_score ?? 0),
+      energyScore: Number(result?.energy_score ?? 0),
+      bestMoments: (result?.best_moments ?? []) as { t0: number; t1: number; note?: string }[],
+      pauses: (result?.pauses ?? []) as { t0: number; t1: number; note?: string; value?: number }[],
     };
   }, [result]);
   const allEvents = useMemo(() => (result?.events ?? []) as MetricEvent[], [result?.events]);
@@ -696,6 +703,29 @@ export default function Page() {
             suggestions={cards.suggestions}
           />
 
+          <InsightsPanel
+            insights={(() => {
+              const lines: string[] = [];
+              if (cards.engagementDrops?.length) {
+                lines.push(`Lost engagement at ${formatTime(Number(cards.engagementDrops[0].t0 || 0))}`);
+              }
+              if (typeof cards.eye === "number" && cards.eye < 0.5) {
+                lines.push("Eye contact drops during explanation");
+              }
+              if (typeof cards.wpm === "number" && cards.wpm > 160) {
+                lines.push("Speech is strong but slightly fast");
+              } else if (typeof cards.wpm === "number" && cards.wpm < 95) {
+                lines.push("Speech is clear but slightly slow");
+              }
+              return lines.slice(0, 5);
+            })()}
+            engagementDrops={cards.engagementDrops}
+            confidenceScore={cards.confidenceScore}
+            energyScore={cards.energyScore}
+            duration={Number(videoDuration || cards.durationSec || 0)}
+            onSeek={(time) => seekTo(time)}
+          />
+
           <ChannelReportsPanel
             channelSearch={channelSearch}
             onChannelSearchChange={setChannelSearch}
@@ -773,6 +803,7 @@ export default function Page() {
               <Card className="lg:col-span-8 p-4 rounded-xl shadow-sm transition-all duration-500 bg-white/5 border border-white/10 backdrop-blur text-white">
                 <MultiMetricTimeline
                   events={filteredEvents}
+                  engagementDrops={cards.engagementDrops as MetricEvent[]}
                   selectedMetric={selectedMetric}
                   durationSec={Number(videoDuration || cards.durationSec || 0)}
                   currentTime={currentTime}
@@ -791,6 +822,15 @@ export default function Page() {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.4, ease: "easeOut" }}
                 >
+                <Card id="demo-best" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
+                  <BestMomentsPanel
+                    moments={cards.bestMoments}
+                    onClickMoment={(t0, t1) => {
+                      setActiveEvent({ metric: "best_moment", t0, t1, note: "Strong delivery with high engagement" });
+                      seekTo(t0, t1);
+                    }}
+                  />
+                </Card>
                 <Card id="demo-worst" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
                   <WorstMomentsPanel
                     moments={cards.worstMoments}
@@ -814,6 +854,28 @@ export default function Page() {
                 </Card>
                 <Card id="demo-coach" className="p-4 rounded-xl shadow-sm bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.005] transition-transform">
                   <CoachPanel comments={cards.coachComments} onClickComment={(t0) => seekTo(t0)} />
+                  <div className="mt-3 border-t border-white/10 pt-3">
+                    <div className="text-sm font-semibold mb-2">⏱ Pauses</div>
+                    <div className="space-y-2 max-h-[120px] overflow-auto">
+                      {cards.pauses.length ? (
+                        cards.pauses.map((p, i) => (
+                          <button
+                            key={`${i}-${p.t0}`}
+                            type="button"
+                            className="w-full text-left border border-white/10 rounded-lg px-3 py-2 hover:bg-white/10"
+                            onClick={() => seekTo(Number(p.t0 || 0), Number(p.t1 || p.t0 || 0))}
+                          >
+                            <div className="text-xs font-semibold">
+                              {formatTime(Number(p.t0 || 0))} - {formatTime(Number(p.t1 || p.t0 || 0))}
+                            </div>
+                            <div className="text-[11px] text-slate-300">{p.note || "Long pause detected"}</div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="text-xs text-slate-300">No long pauses detected.</div>
+                      )}
+                    </div>
+                  </div>
                 </Card>
                 </motion.div>
               ) : null}

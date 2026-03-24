@@ -23,11 +23,16 @@ function eventColor(metric?: string, label?: string): string {
   if (m === "expression_change") return "bg-blue-400/80";
   if (m === "speech_rate") return l === "normal" ? "bg-green-300/80" : "bg-amber-400/80";
   if (m === "tonal_variation") return l === "monotone" ? "bg-red-300/80" : "bg-cyan-400/80";
+  if (m === "best_moment") return "bg-emerald-400/85";
+  if (m === "worst_moment") return "bg-red-500/85";
+  if (m === "pause") return "bg-yellow-400/85";
+  if (m === "engagement_drop") return "bg-red-500/85";
   return "bg-slate-400/80";
 }
 
 export function MultiMetricTimeline(props: {
   events: MetricEvent[];
+  engagementDrops?: MetricEvent[];
   selectedMetric: string;
   durationSec: number;
   currentTime: number;
@@ -91,12 +96,12 @@ export function MultiMetricTimeline(props: {
           setTooltip(null);
         }}
       >
-        {["eye_contact", "filler_words", "gestures", "tonal_variation"].map((rowMetric) => (
+        {["eye_contact", "filler_words", "gestures", "tonal_variation", "best_moment", "worst_moment", "pause", "engagement_drop"].map((rowMetric) => (
           <div key={rowMetric} className="relative h-8 rounded-md bg-white/70 border border-black/5">
             <div className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-muted z-10">
               {labelCase(rowMetric.replace("_", " "))}
             </div>
-            {filteredEvents
+            {((rowMetric === "engagement_drop" ? props.engagementDrops || [] : filteredEvents) as MetricEvent[])
               .filter((ev) => String(ev.metric || ev.type) === rowMetric)
               .map((ev, i) => {
                 const t0 = Number(ev.t0 || 0);
@@ -108,7 +113,9 @@ export function MultiMetricTimeline(props: {
                   Number(props.activeEvent.t0 || 0) === t0 &&
                   String(props.activeEvent.metric || props.activeEvent.type) === String(ev.metric || ev.type);
                 const isLive = activeTimelineEvent === ev;
-                const isWorst = String(ev.metric || ev.type) === "eye_contact" && String(ev.label || "").toLowerCase().includes("low");
+                const isWorst =
+                  (String(ev.metric || ev.type) === "eye_contact" && String(ev.label || "").toLowerCase().includes("low")) ||
+                  String(ev.metric || ev.type) === "engagement_drop";
                 return (
                   <motion.div
                     key={`${rowMetric}-${i}-${ev.t0}`}

@@ -279,7 +279,7 @@ def transcribe_and_measure(
     )
 
     # Timeline bins (60s): allocate per segment by overlap.
-    bin_size = 60
+    bin_size = 10
     total_dur = max((seg["end"] for seg in seg_out), default=0.0)
     n_bins = int(math.ceil(total_dur / bin_size)) if total_dur > 0 else 0
     bins = [
