@@ -103,6 +103,7 @@ export default function Page() {
   const [demoSpotlight, setDemoSpotlight] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const [demoMetricValue, setDemoMetricValue] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const timelineVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const demoSteps = useMemo(
     () => [
@@ -529,21 +530,23 @@ export default function Page() {
   }
 
   const seekTo = (time: number, endTime?: number) => {
-    const v = videoRef.current;
-    if (!v) return;
     const t = Math.max(0, Number.isFinite(time) ? time : 0);
-    v.currentTime = t;
-    void v.play();
-    if (typeof endTime === "number" && endTime > t) {
-      const stopAt = endTime;
-      const stopHandler = () => {
-        if (v.currentTime >= stopAt) {
-          v.pause();
-          v.removeEventListener("timeupdate", stopHandler);
-        }
-      };
-      v.addEventListener("timeupdate", stopHandler);
-    }
+    const players = [videoRef.current, timelineVideoRef.current].filter(Boolean) as HTMLVideoElement[];
+    if (!players.length) return;
+    players.forEach((player) => {
+      player.currentTime = t;
+      void player.play();
+      if (typeof endTime === "number" && endTime > t) {
+        const stopAt = endTime;
+        const stopHandler = () => {
+          if (player.currentTime >= stopAt) {
+            player.pause();
+            player.removeEventListener("timeupdate", stopHandler);
+          }
+        };
+        player.addEventListener("timeupdate", stopHandler);
+      }
+    });
   };
   const stepId = demoSteps[currentStep]?.id ?? "";
   const stepMotion = useMemo(() => {
@@ -801,6 +804,35 @@ export default function Page() {
           {cards.durationSec > 0 && cards.events?.length > 0 && showTimelineSlide ? (
             <div id="demo-timeline" className="col-span-12 grid grid-cols-1 lg:grid-cols-12 gap-5">
               <Card className="lg:col-span-8 p-4 rounded-xl shadow-sm transition-all duration-500 bg-white/5 border border-white/10 backdrop-blur text-white">
+                <div className="mb-4 border border-white/10 rounded-xl overflow-hidden bg-black/30 aspect-video flex items-center justify-center text-slate-300 text-sm">
+                  {localVideoUrl ? (
+                    <video
+                      ref={timelineVideoRef}
+                      src={localVideoUrl}
+                      controls
+                      className="w-full h-full object-contain bg-black"
+                      onLoadedMetadata={(e) => setVideoDuration(Number(e.currentTarget.duration || 0))}
+                      onTimeUpdate={(e) => {
+                        const current = Number(e.currentTarget.currentTime || 0);
+                        setCurrentTime(current);
+                        const mainPlayer = videoRef.current;
+                        if (mainPlayer && Math.abs(mainPlayer.currentTime - current) > 0.35) {
+                          mainPlayer.currentTime = current;
+                        }
+                      }}
+                      onPlay={() => {
+                        const mainPlayer = videoRef.current;
+                        if (mainPlayer && mainPlayer.paused) void mainPlayer.play();
+                      }}
+                      onPause={() => {
+                        const mainPlayer = videoRef.current;
+                        if (mainPlayer && !mainPlayer.paused) mainPlayer.pause();
+                      }}
+                    />
+                  ) : (
+                    "Select a video to preview it above the timeline"
+                  )}
+                </div>
                 <MultiMetricTimeline
                   events={filteredEvents}
                   engagementDrops={cards.engagementDrops as MetricEvent[]}
