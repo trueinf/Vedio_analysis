@@ -75,6 +75,22 @@ def _coach_comment_for_event(e: dict[str, Any]) -> str:
     return "Improve delivery in this segment."
 
 
+def _metric_impact_text(metric: str) -> str:
+    if metric == "eye_contact":
+        return "Reduced audience trust and engagement."
+    if metric == "filler_words":
+        return "Lowered clarity and confidence."
+    if metric == "speech_rate":
+        return "Made message harder to follow."
+    if metric == "tonal_variation":
+        return "Delivery felt flat and less engaging."
+    if metric == "gestures":
+        return "Lowered visual emphasis and communication impact."
+    if metric == "expression_change":
+        return "Reduced emotional clarity."
+    return "Reduced communication impact."
+
+
 def _extract_clip(
     *,
     video_path: str,
@@ -627,7 +643,17 @@ class Orchestrator:
             if t1 - t0 > 10.0:
                 t1 = t0 + 10.0
             reason = str(e.get("note") or e.get("message") or f"{e.get('metric','event')} issue")
-            worst_moments.append({"t0": round(t0, 3), "t1": round(t1, 3), "reason": reason})
+            m = str(e.get("metric") or e.get("type") or "event")
+            worst_moments.append(
+                {
+                    "t0": round(t0, 3),
+                    "t1": round(t1, 3),
+                    "reason": reason,
+                    "metric": m,
+                    "impact": _metric_impact_text(m),
+                    "label": f"Issue in {_fmt_metric_name(m)}",
+                }
+            )
 
         coach_comments: list[dict[str, Any]] = []
         # prioritize refined weakest sections and known issue events
@@ -690,6 +716,9 @@ class Orchestrator:
                             "t0": wm["t0"],
                             "t1": wm["t1"],
                             "url": f"/api/clips/{job.id}/{clip_name}",
+                            "label": wm.get("label", "Issue clip"),
+                            "reason": wm.get("reason", ""),
+                            "impact": wm.get("impact", ""),
                         }
                     )
 

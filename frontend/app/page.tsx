@@ -31,6 +31,9 @@ import { CoachSummary } from "../components/CoachSummary";
 import { ScoreBreakdown } from "../components/ScoreBreakdown";
 import { PriorityList } from "../components/PriorityList";
 import { MetricStoryCard } from "../components/MetricStoryCard";
+import { ScoreSimulator } from "../components/ScoreSimulator";
+import { ClipPlayer } from "../components/ClipPlayer";
+import { CoachingPlan } from "../components/CoachingPlan";
 import { MetricEvent, MetricKey } from "../components/video-analysis-types";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const MultiMetricTimeline = dynamic(() => import("../components/MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
@@ -404,6 +407,14 @@ export default function Page() {
       ],
       worstMoments: (result?.worst_moments ?? []) as { t0: number; t1: number; reason: string }[],
       clips: (result?.clips ?? []) as { t0: number; t1: number; url: string }[],
+      storyClips: (result?.clips ?? []) as {
+        t0: number;
+        t1: number;
+        url: string;
+        label?: string;
+        reason?: string;
+        impact?: string;
+      }[],
       coachComments: (result?.coach_comments ?? []) as { t0: number; comment: string }[],
       engagementDrops: (result?.engagement_drops ?? []) as { t0: number; t1?: number; note?: string; value?: number }[],
       confidenceScore: Number(result?.confidence_score ?? 0),
@@ -785,6 +796,11 @@ export default function Page() {
             <ScoreBreakdown score={Number(cards.score || 0)} parts={cards.scoreBreakdown} />
             <PriorityList items={cards.priorities} />
           </div>
+          <div className="col-span-12 grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ScoreSimulator score={Number(cards.score || 0)} parts={cards.scoreBreakdown} />
+            <ClipPlayer clips={cards.storyClips} apiBase={API_BASE} onSeek={(t0, t1) => seekTo(t0, t1)} />
+          </div>
+          <CoachingPlan priorities={cards.priorities} />
           {cards.metricStories.length ? (
             <div className="col-span-12 grid grid-cols-1 lg:grid-cols-2 gap-4">
               {cards.metricStories.map((s) => (
