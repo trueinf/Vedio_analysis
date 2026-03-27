@@ -12,6 +12,18 @@ export type Job = {
   error_message: string;
 };
 
+export type JobHistoryItem = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  status: JobStatus;
+  stage: string;
+  progress: number;
+  original_filename: string;
+  duration_sec: number;
+  has_result: boolean;
+};
+
 export type ChannelItem = {
   id: string;
   name: string;
@@ -125,6 +137,12 @@ export async function getJob(jobId: string): Promise<Job> {
   if (!res.ok) throw new Error(`Job fetch failed (${res.status})`);
   const data = await res.json();
   return data.job as Job;
+}
+
+export async function listJobs(limit = 200): Promise<{ jobs: JobHistoryItem[] }> {
+  const res = await fetch(`${API_BASE}/api/jobs?limit=${limit}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Jobs list failed (${res.status})`);
+  return await res.json();
 }
 
 export async function getResult(jobId: string): Promise<any> {

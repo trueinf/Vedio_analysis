@@ -12,6 +12,8 @@ import {
   getCollectionSummary,
   getJob,
   getResult,
+  JobHistoryItem,
+  listJobs,
   listChannels,
   renameChannel,
   uploadVideo,
@@ -22,7 +24,7 @@ import {
   Card,
 } from "../components/ui";
 import { DemoOverlay } from "../components/DemoOverlay";
-import { ChannelReportsPanel } from "../components/ChannelReportsPanel";
+import { AnalysisHistoryPanel } from "../components/AnalysisHistoryPanel";
 import { VideoUploadPanel } from "../components/VideoUploadPanel";
 import { InsightsSummaryPanel } from "../components/InsightsSummaryPanel";
 import { MetricsGrid } from "../components/MetricsGrid";
@@ -101,6 +103,7 @@ export default function Page() {
   const [selectedChannelId, setSelectedChannelId] = useState<string>("");
   const [channelCollections, setChannelCollections] = useState<Record<string, ChannelCollection[]>>({});
   const [busy, setBusy] = useState(false);
+  const [historyJobs, setHistoryJobs] = useState<JobHistoryItem[]>([]);
   const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
   const [activeEvent, setActiveEvent] = useState<MetricEvent | null>(null);
   const [isMomentPanelOpen, setIsMomentPanelOpen] = useState(false);
@@ -249,6 +252,15 @@ export default function Page() {
     }
   }, []);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await listJobs(300);
+      setHistoryJobs(res.jobs || []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!jobId && !uploadedJobs.length) return;
     setBusy(true);
@@ -324,16 +336,21 @@ export default function Page() {
         }
       }
       await loadChannels();
+      await loadHistory();
     } catch (e: any) {
       setJobError(e?.message ?? "Refresh failed");
     } finally {
       setBusy(false);
     }
-  }, [jobId, uploadedJobs, loadedResultJobId, collectionId, loadChannels]);
+  }, [jobId, uploadedJobs, loadedResultJobId, collectionId, loadChannels, loadHistory]);
 
   useEffect(() => {
     loadChannels().catch(() => {});
   }, [loadChannels]);
+
+  useEffect(() => {
+    loadHistory().catch(() => {});
+  }, [loadHistory]);
 
   useEffect(() => {
     if (!selectedChannelId) return;
@@ -341,7 +358,9 @@ export default function Page() {
   }, [selectedChannelId, loadCollectionsForChannel]);
 
   useEffect(() => {
-    const activeCount = uploadedJobs.filter((j) => j.status === "queued" || j.status === "processing").length;
+    const activeCount = (historyJobs.length ? historyJobs : uploadedJobs).filter(
+      (j: any) => j.status === "queued" || j.status === "processing"
+    ).length;
     const hasActive = activeCount > 0 || (jobId && (status === "queued" || status === "processing"));
     if (!hasActive) return;
     const intervalMs = activeCount > 1 ? 3000 : 5000;
@@ -349,7 +368,7 @@ export default function Page() {
       refresh().catch(() => {});
     }, intervalMs);
     return () => clearInterval(t);
-  }, [jobId, status, uploadedJobs, refresh]);
+  }, [jobId, status, uploadedJobs, historyJobs, refresh]);
 
   const cards = useMemo(() => {
     const s = result?.summary ?? {};
@@ -817,49 +836,20 @@ export default function Page() {
           ) : null}
           <AgentTracePanel trace={cards.agentTrace} />
 
-          <ChannelReportsPanel
-            channelSearch={channelSearch}
-            onChannelSearchChange={setChannelSearch}
-            channelViewMode={channelViewMode}
-            onChannelViewModeChange={setChannelViewMode}
-            visibleChannels={visibleChannels}
-            selectedChannelId={selectedChannelId}
-            onSelectChannel={(channelId, channelNameValue) => {
-              setSelectedChannelId(channelId);
-              setRenameDraft(channelNameValue);
-            }}
-            renameDraft={renameDraft}
-            onRenameDraftChange={setRenameDraft}
-            channelCollections={channelCollections}
-            onRenameChannel={async (channelId) => {
-              const next = renameDraft.trim();
-              if (!next) return;
+          <AnalysisHistoryPanel
+            jobs={historyJobs}
+            activeJobId={jobId}
+            onSelectJob={async (nextJobId) => {
+              setJobId(nextJobId);
               try {
-                await renameChannel(channelId, next);
-                await loadChannels();
-                setChannelName(next);
-                setRenameDraft("");
-              } catch {
-                // ignore
-              }
-            }}
-            onDeleteChannel={async (channelId) => {
-              try {
-                await deleteChannel(channelId);
-                setSelectedChannelId("");
-                setCollectionSummary(null);
-                await loadChannels();
-              } catch {
-                // ignore
-              }
-            }}
-            onSelectCollection={async (nextCollectionId) => {
-              setCollectionId(nextCollectionId);
-              try {
-                const cs = (await getCollectionSummary(nextCollectionId)) as CollectionSummary;
-                setCollectionSummary(cs);
-                if (cs.summary.best_video) {
-                  setJobId(cs.summary.best_video);
+                const job = await getJob(nextJobId);
+                setStatus(job.status);
+                setStage((job as any).stage ?? "");
+                setProgress(Number((job as any).progress ?? 0));
+                if (job.status === "completed") {
+                  const r = await getResult(nextJobId);
+                  setResult(r);
+                  setLoadedResultJobId(nextJobId);
                 }
               } catch {
                 // ignore

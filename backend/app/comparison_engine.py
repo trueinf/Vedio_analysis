@@ -67,6 +67,18 @@ BENCHMARKS: dict[str, dict[str, float]] = {
 }
 
 
+def benchmark_from_results(results: list[dict[str, Any]]) -> dict[str, float] | None:
+    if not results:
+        return None
+    rows = [_metric_from_result(r) for r in results]
+    keys = rows[0].keys()
+    out: dict[str, float] = {}
+    for k in keys:
+        vals = [_safe_float(r.get(k), 0.0) for r in rows]
+        out[k] = round(sum(vals) / max(1, len(vals)), 2)
+    return out
+
+
 def build_comparison_report(
     *,
     result: dict[str, Any],
@@ -75,17 +87,23 @@ def build_comparison_report(
     competitor_channel: str,
     goal: str,
     platform: str,
+    benchmark_override: dict[str, float] | None = None,
+    benchmark_label_override: str | None = None,
+    benchmark_sample_size: int = 0,
 ) -> dict[str, Any]:
     you = _metric_from_result(result)
     base = BENCHMARKS.get((niche or "").lower(), BENCHMARKS["default"])
-    if compare_mode == "specific_channel" and competitor_channel.strip():
-        # deterministic channel-adjusted benchmark
+    if benchmark_override:
+        bench = benchmark_override
+        benchmark_label = benchmark_label_override or "Creator benchmark"
+    elif compare_mode == "specific_channel" and competitor_channel.strip():
+        # fallback deterministic channel-adjusted benchmark when no channel data exists
         factor = 1.05
         bench = {k: max(0.0, min(100.0, round(v * factor, 2))) for k, v in base.items()}
-        benchmark_label = competitor_channel.strip()
+        benchmark_label = competitor_channel.strip() + " (estimated)"
     else:
         bench = base
-        benchmark_label = f"Top creators ({niche or 'general'})"
+        benchmark_label = f"Top creators ({niche or 'general'}, estimated)"
 
     metric_order = ["hook_strength", "retention_style", "speech_clarity", "energy_level"]
     labels = {
@@ -185,6 +203,7 @@ def build_comparison_report(
             "goal": goal,
             "platform": platform,
             "benchmark_label": benchmark_label,
+            "benchmark_sample_size": int(benchmark_sample_size or 0),
         },
         "benchmark_table": benchmark_table,
         "gap_explanations": gap_explanations,

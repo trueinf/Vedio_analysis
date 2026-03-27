@@ -17,7 +17,7 @@ from sqlalchemy import func, select, text
 from app.db import Base, engine, get_db
 from app.models import Channel, Collection, Job, JobStatus
 from app.migrations import ensure_agent_tables, ensure_job_progress_columns
-from app.comparison_engine import build_comparison_report
+from app.comparison_engine import benchmark_from_results, build_comparison_report
 from app.schemas import (
     BatchUploadResponse,
     ComparisonIn,
@@ -30,6 +30,8 @@ from app.schemas import (
     CollectionSummaryOut,
     HealthOut,
     JobCreateResponse,
+    JobHistoryItemOut,
+    JobHistoryOut,
     JobOut,
     JobResultOut,
     UploadResponse,
@@ -561,6 +563,26 @@ def create_app() -> FastAPI:
         )
         return JobCreateResponse(job=out)
 
+    @app.get("/api/jobs", response_model=JobHistoryOut)
+    def list_jobs(limit: int = 200, db: Session = Depends(get_db)) -> JobHistoryOut:
+        lim = max(1, min(int(limit or 200), 1000))
+        rows = list(db.execute(select(Job).order_by(Job.created_at.desc()).limit(lim)).scalars().all())
+        out = [
+            JobHistoryItemOut(
+                id=j.id,
+                created_at=j.created_at,
+                updated_at=j.updated_at,
+                status=j.status.value,
+                stage=getattr(j, "stage", "queued") or "queued",
+                progress=float(getattr(j, "progress", 0.0) or 0.0),
+                original_filename=j.original_filename or "",
+                duration_sec=int(j.duration_sec or 0),
+                has_result=bool(j.result_path and Path(j.result_path).exists()),
+            )
+            for j in rows
+        ]
+        return JobHistoryOut(jobs=out)
+
     @app.get("/api/jobs/{job_id}/result", response_model=JobResultOut)
     def get_result(job_id: str, db: Session = Depends(get_db)) -> JobResultOut:
         job = db.get(Job, job_id)
@@ -610,6 +632,61 @@ def create_app() -> FastAPI:
         if not job.result_path or not Path(job.result_path).exists():
             raise HTTPException(status_code=500, detail="result missing")
         result = json.loads(Path(job.result_path).read_text(encoding="utf-8"))
+        bench_label = ""
+        bench_rows: list[dict] = []
+
+        if payload.compare_mode == "specific_channel" and payload.competitor_channel.strip():
+            ch = db.execute(
+                select(Channel).where(func.lower(Channel.name) == payload.competitor_channel.strip().lower())
+            ).scalar_one_or_none()
+            if ch:
+                coll_ids = [
+                    c.id
+                    for c in db.execute(select(Collection).where(Collection.channel_id == ch.id)).scalars().all()
+                ]
+                if coll_ids:
+                    jobs = list(
+                        db.execute(
+                            select(Job).where(
+                                Job.collection_id.in_(coll_ids),
+                                Job.status == JobStatus.completed,
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for j in jobs:
+                        if j.result_path and Path(j.result_path).exists():
+                            try:
+                                bench_rows.append(json.loads(Path(j.result_path).read_text(encoding="utf-8")))
+                            except Exception:
+                                continue
+                    bench_label = ch.name
+
+        if payload.compare_mode == "niche_benchmark" and not bench_rows:
+            jobs = list(
+                db.execute(select(Job).where(Job.status == JobStatus.completed).order_by(Job.created_at.desc())).scalars().all()
+            )
+            for j in jobs:
+                if j.id == payload.job_id:
+                    continue
+                if j.result_path and Path(j.result_path).exists():
+                    try:
+                        bench_rows.append(json.loads(Path(j.result_path).read_text(encoding="utf-8")))
+                    except Exception:
+                        continue
+            # "top creators" approximation from internal data: top 30% by overall score
+            scored = []
+            for r in bench_rows:
+                s = float((r.get("summary", {}) or {}).get("overall_score") or 0.0)
+                scored.append((s, r))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            if scored:
+                keep = max(1, int(len(scored) * 0.3))
+                bench_rows = [x[1] for x in scored[:keep]]
+                bench_label = f"Top internal creators ({payload.niche})"
+
+        bench = benchmark_from_results(bench_rows) if bench_rows else None
         report = build_comparison_report(
             result=result,
             compare_mode=payload.compare_mode,
@@ -617,6 +694,9 @@ def create_app() -> FastAPI:
             competitor_channel=payload.competitor_channel,
             goal=payload.goal,
             platform=payload.platform,
+            benchmark_override=bench,
+            benchmark_label_override=bench_label or None,
+            benchmark_sample_size=len(bench_rows),
         )
         return ComparisonOut(report=report)
 

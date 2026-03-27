@@ -9,6 +9,7 @@ type ComparisonReport = {
     strengths?: string[];
     weaknesses?: string[];
     benchmark_label?: string;
+    benchmark_sample_size?: number;
   };
   benchmark_table?: {
     metric: string;
@@ -118,6 +119,14 @@ export function ComparisonCoachPanel(props: {
 
       {report ? (
         <div className="mt-4 space-y-4">
+          <div className="rounded-lg border border-cyan-300/25 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100">
+            Comparing against{" "}
+            <span className="font-semibold">
+              {report.summary?.benchmark_label || "selected benchmark"}
+            </span>
+            {" · "}sample size:{" "}
+            <span className="font-semibold">{Number(report.summary?.benchmark_sample_size ?? 0)}</span>
+          </div>
           <div className="rounded-lg border border-white/10 bg-white/5 p-3">
             <div className="text-sm text-slate-100">{report.summary?.coach_text}</div>
           </div>

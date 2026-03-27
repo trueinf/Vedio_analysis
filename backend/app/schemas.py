@@ -23,6 +23,22 @@ class JobCreateResponse(BaseModel):
     job: JobOut
 
 
+class JobHistoryItemOut(BaseModel):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+    status: JobStatus
+    stage: str = "queued"
+    progress: float = 0.0
+    original_filename: str = ""
+    duration_sec: int = 0
+    has_result: bool = False
+
+
+class JobHistoryOut(BaseModel):
+    jobs: list[JobHistoryItemOut]
+
+
 class JobResultOut(BaseModel):
     job_id: str
     result: dict[str, Any]
