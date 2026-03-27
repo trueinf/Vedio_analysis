@@ -29,6 +29,30 @@ export type ChannelCollection = {
   failed_videos: number;
 };
 
+export type ComparisonInput = {
+  job_id: string;
+  source_type: "upload" | "youtube_url";
+  video_url?: string;
+  compare_mode: "niche_benchmark" | "specific_channel";
+  niche: string;
+  competitor_channel?: string;
+  goal: "retention" | "clarity" | "conversion" | "confidence";
+  platform: "youtube_long" | "youtube_shorts";
+  language?: string;
+  format?: "talking_head" | "tutorial" | "vlog" | "interview";
+  audience_level?: "beginner" | "intermediate" | "advanced";
+};
+
+export async function getComparisonReport(payload: ComparisonInput): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/comparison/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Comparison report failed (${res.status})`);
+  return await res.json();
+}
+
 export async function uploadVideo(
   file: File,
   channelName = ""

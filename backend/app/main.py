@@ -17,8 +17,11 @@ from sqlalchemy import func, select, text
 from app.db import Base, engine, get_db
 from app.models import Channel, Collection, Job, JobStatus
 from app.migrations import ensure_agent_tables, ensure_job_progress_columns
+from app.comparison_engine import build_comparison_report
 from app.schemas import (
     BatchUploadResponse,
+    ComparisonIn,
+    ComparisonOut,
     ChannelCollectionOut,
     ChannelCollectionsOut,
     ChannelItemOut,
@@ -596,6 +599,26 @@ def create_app() -> FastAPI:
         db.commit()
         enqueue_job(job_id)
         return UploadResponse(job_id=job_id, status=job.status.value, message="retried")
+
+    @app.post("/api/comparison/report", response_model=ComparisonOut)
+    def comparison_report(payload: ComparisonIn, db: Session = Depends(get_db)) -> ComparisonOut:
+        job = db.get(Job, payload.job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="job not found")
+        if job.status != JobStatus.completed:
+            raise HTTPException(status_code=409, detail=f"job not completed (status={job.status.value})")
+        if not job.result_path or not Path(job.result_path).exists():
+            raise HTTPException(status_code=500, detail="result missing")
+        result = json.loads(Path(job.result_path).read_text(encoding="utf-8"))
+        report = build_comparison_report(
+            result=result,
+            compare_mode=payload.compare_mode,
+            niche=payload.niche,
+            competitor_channel=payload.competitor_channel,
+            goal=payload.goal,
+            platform=payload.platform,
+        )
+        return ComparisonOut(report=report)
 
     return app
 

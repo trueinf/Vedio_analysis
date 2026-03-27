@@ -8,6 +8,7 @@ import {
   ChannelItem,
   deleteChannel,
   getChannelCollections,
+  getComparisonReport,
   getCollectionSummary,
   getJob,
   getResult,
@@ -28,6 +29,7 @@ import { MetricsGrid } from "../components/MetricsGrid";
 import { InsightsPanel } from "../components/InsightsPanel";
 import { AgentTracePanel } from "../components/AgentTracePanel";
 import { CoachSummary } from "../components/CoachSummary";
+import { ComparisonCoachPanel } from "../components/ComparisonCoachPanel";
 import { ScoreBreakdown } from "../components/ScoreBreakdown";
 import { PriorityList } from "../components/PriorityList";
 import { MetricStoryCard } from "../components/MetricStoryCard";
@@ -792,6 +794,11 @@ export default function Page() {
             onSeek={(time) => seekTo(time)}
           />
           <CoachSummary summary={cards.coachSummary} />
+          <ComparisonCoachPanel
+            jobId={jobId}
+            onSeek={(start, end) => seekTo(start, end)}
+            onGenerate={getComparisonReport}
+          />
           <div className="col-span-12 grid grid-cols-1 lg:grid-cols-2 gap-4">
             <ScoreBreakdown score={Number(cards.score || 0)} parts={cards.scoreBreakdown} />
             <PriorityList items={cards.priorities} />

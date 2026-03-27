@@ -92,3 +92,21 @@ class ChannelCollectionsOut(BaseModel):
 class ChannelRenameIn(BaseModel):
     name: str
 
+
+class ComparisonIn(BaseModel):
+    job_id: str
+    source_type: Literal["upload", "youtube_url"] = "upload"
+    video_url: str = ""
+    compare_mode: Literal["niche_benchmark", "specific_channel"] = "niche_benchmark"
+    niche: str = "education"
+    competitor_channel: str = ""
+    goal: Literal["retention", "clarity", "conversion", "confidence"] = "retention"
+    platform: Literal["youtube_long", "youtube_shorts"] = "youtube_long"
+    language: str = "en"
+    format: Literal["talking_head", "tutorial", "vlog", "interview"] = "talking_head"
+    audience_level: Literal["beginner", "intermediate", "advanced"] = "beginner"
+
+
+class ComparisonOut(BaseModel):
+    report: dict[str, Any]
+
