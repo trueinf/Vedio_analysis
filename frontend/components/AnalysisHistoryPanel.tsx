@@ -1,7 +1,8 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { JobHistoryItem } from "../lib/api";
-import { Card, premiumSurfaceClass } from "./ui";
+import { Card, PremiumChip, premiumSurfaceClass } from "./ui";
 
 function formatDate(s: string): string {
   const d = new Date(s);
@@ -14,13 +15,34 @@ export function AnalysisHistoryPanel(props: {
   activeJobId: string | null;
   onSelectJob: (jobId: string) => void;
 }) {
+  const [filter, setFilter] = useState<"all" | "completed" | "processing" | "failed">("all");
+  const visibleJobs = useMemo(() => {
+    if (filter === "all") return props.jobs;
+    if (filter === "processing") return props.jobs.filter((j) => j.status === "processing" || j.status === "queued");
+    return props.jobs.filter((j) => j.status === filter);
+  }, [props.jobs, filter]);
+
   return (
     <Card className={`col-span-12 lg:col-span-3 lg:row-span-2 p-4 h-full lg:ml-2 ${premiumSurfaceClass}`}>
       <div className="text-sm font-semibold">Analysis History</div>
       <div className="text-xs text-slate-300 mt-1">All analyses with status. Reopen any completed result.</div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <PremiumChip active={filter === "all"} onClick={() => setFilter("all")}>
+          All
+        </PremiumChip>
+        <PremiumChip active={filter === "completed"} onClick={() => setFilter("completed")}>
+          Completed
+        </PremiumChip>
+        <PremiumChip active={filter === "processing"} onClick={() => setFilter("processing")}>
+          Processing
+        </PremiumChip>
+        <PremiumChip active={filter === "failed"} onClick={() => setFilter("failed")}>
+          Failed
+        </PremiumChip>
+      </div>
       <div className="mt-3 space-y-2 max-h-[620px] overflow-auto pr-1">
-        {props.jobs.length ? (
-          props.jobs.map((j) => {
+        {visibleJobs.length ? (
+          visibleJobs.map((j) => {
             const isActive = props.activeJobId === j.id;
             const statusColor =
               j.status === "completed"
@@ -56,7 +78,7 @@ export function AnalysisHistoryPanel(props: {
             );
           })
         ) : (
-          <div className="text-xs text-slate-300">No analyses yet.</div>
+          <div className="text-xs text-slate-300">No analyses found for this filter.</div>
         )}
       </div>
     </Card>
