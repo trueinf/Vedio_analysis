@@ -7,7 +7,14 @@ from app.pipeline.audio_analysis import transcribe_and_measure
 
 
 class SpeechAgent:
-    def run(self, wav_path: str, *, duration_sec: int) -> SpeechAgentOutput:
+    def run(
+        self,
+        wav_path: str,
+        *,
+        duration_sec: int,
+        model_override: str | None = None,
+        compute_type_override: str | None = None,
+    ) -> SpeechAgentOutput:
         # Speed/quality trade-off for long videos.
         # (tiny/base are much faster on CPU; small is default for shorter clips)
         if duration_sec >= 60 * 60:
@@ -16,13 +23,15 @@ class SpeechAgent:
             model_size = "base"
         else:
             model_size = None
+        if model_override is not None:
+            model_size = model_override
 
         cpu_threads = max(1, (os.cpu_count() or 4) - 1)
         audio = transcribe_and_measure(
             wav_path,
             model_size=model_size,
             device="cpu",
-            compute_type="int8",
+            compute_type=(compute_type_override or "int8"),
         )
         return SpeechAgentOutput(
             transcript=audio.transcript,

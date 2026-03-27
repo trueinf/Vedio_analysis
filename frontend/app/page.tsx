@@ -26,6 +26,11 @@ import { VideoUploadPanel } from "../components/VideoUploadPanel";
 import { InsightsSummaryPanel } from "../components/InsightsSummaryPanel";
 import { MetricsGrid } from "../components/MetricsGrid";
 import { InsightsPanel } from "../components/InsightsPanel";
+import { AgentTracePanel } from "../components/AgentTracePanel";
+import { CoachSummary } from "../components/CoachSummary";
+import { ScoreBreakdown } from "../components/ScoreBreakdown";
+import { PriorityList } from "../components/PriorityList";
+import { MetricStoryCard } from "../components/MetricStoryCard";
 import { MetricEvent, MetricKey } from "../components/video-analysis-types";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const MultiMetricTimeline = dynamic(() => import("../components/MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
@@ -405,6 +410,53 @@ export default function Page() {
       energyScore: Number(result?.energy_score ?? 0),
       bestMoments: (result?.best_moments ?? []) as { t0: number; t1: number; note?: string }[],
       pauses: (result?.pauses ?? []) as { t0: number; t1: number; note?: string; value?: number }[],
+      coachSummary: (result?.coach_summary ?? null) as {
+        overall: string;
+        top_priorities: { rank: number; metric: string; title: string; reason?: string }[];
+        confidence_explanation: string;
+      } | null,
+      scoreBreakdown: (result?.score_breakdown ?? []) as {
+        metric: string;
+        label: string;
+        delta: number;
+        reason?: string;
+      }[],
+      priorities: (result?.priorities ?? []) as {
+        metric: string;
+        title: string;
+        impact?: string;
+        why_now?: string;
+      }[],
+      metricStories: (result?.metric_stories ?? []) as {
+        metric: string;
+        score: number;
+        title: string;
+        insight: string;
+        impact: string;
+        cause: string;
+        evidence: {
+          start: number;
+          end: number;
+          description: string;
+          impact?: string;
+          why_problem?: string;
+        }[];
+        actions: string[];
+      }[],
+      agentTrace: (result?.debug?.agent_trace ?? []) as {
+        agent?: string;
+        step?: string;
+        plan?: Record<string, unknown>;
+        reason?: string;
+        model?: string | null;
+        words?: number;
+        face_visible_ratio?: number;
+        engagement_score?: number;
+        confidence_score?: number;
+        overall_score?: number;
+        strengths?: number;
+        suggestions?: number;
+      }[],
     };
   }, [result]);
   const allEvents = useMemo(() => (result?.events ?? []) as MetricEvent[], [result?.events]);
@@ -728,6 +780,19 @@ export default function Page() {
             duration={Number(videoDuration || cards.durationSec || 0)}
             onSeek={(time) => seekTo(time)}
           />
+          <CoachSummary summary={cards.coachSummary} />
+          <div className="col-span-12 grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ScoreBreakdown score={Number(cards.score || 0)} parts={cards.scoreBreakdown} />
+            <PriorityList items={cards.priorities} />
+          </div>
+          {cards.metricStories.length ? (
+            <div className="col-span-12 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {cards.metricStories.map((s) => (
+                <MetricStoryCard key={s.metric} story={s} onSeek={(start, end) => seekTo(start, end)} />
+              ))}
+            </div>
+          ) : null}
+          <AgentTracePanel trace={cards.agentTrace} />
 
           <ChannelReportsPanel
             channelSearch={channelSearch}

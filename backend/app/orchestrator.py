@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.agents.feedback_agent import FeedbackAgent
 from app.agents.fusion_agent import BehaviorFusionAgent
+from app.agents.planner_agent import PlannerAgent
 from app.agents.scoring_agent import ScoringAgent
 from app.agents.speech_agent import SpeechAgent
 from app.agents.vision_agent import VisionAgent
@@ -242,8 +243,166 @@ def _pause_events(words_timed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _merge_time_events(pauses, gap_sec=0.5)
 
 
+def _fmt_metric_name(metric: str) -> str:
+    names = {
+        "speech_rate": "Speech Rate",
+        "filler_words": "Filler Words",
+        "eye_contact": "Eye Contact",
+        "gestures": "Gestures",
+        "tonal_variation": "Tonal Variation",
+        "expression_change": "Expressions",
+    }
+    return names.get(metric, metric.replace("_", " ").title())
+
+
+def _metric_score_breakdown(cards: dict[str, Any], *, expr_pm: float) -> list[dict[str, Any]]:
+    eye_ratio = float((cards.get("eye_contact", {}) or {}).get("on_camera_ratio") or 0.0)
+    filler_pm = float((cards.get("filler_words", {}) or {}).get("per_minute") or 0.0)
+    wpm = float((cards.get("speech_rate", {}) or {}).get("wpm") or 0.0)
+    tonal = float((cards.get("tonal_variation", {}) or {}).get("score") or 0.0)
+    gestures_pm = float((cards.get("gestures", {}) or {}).get("per_minute") or 0.0)
+
+    parts: list[dict[str, Any]] = []
+    eye_penalty = int(round((1.0 - _clamp01(eye_ratio)) * 20.0))
+    parts.append({"metric": "eye_contact", "label": "Eye contact", "delta": -eye_penalty, "reason": "Low camera-facing ratio."})
+    filler_penalty = int(round(_clamp01(filler_pm / 5.0) * 15.0))
+    parts.append({"metric": "filler_words", "label": "Filler words", "delta": -filler_penalty, "reason": "Frequent fillers reduce clarity."})
+    pace_penalty = int(round(10.0 if (0 < wpm < 95 or wpm > 160) else 0.0))
+    parts.append({"metric": "speech_rate", "label": "Speech pace", "delta": -pace_penalty, "reason": "Pace outside ideal range."})
+    tonal_penalty = int(round(_clamp01(max(0.0, 60.0 - tonal) / 60.0) * 10.0))
+    parts.append({"metric": "tonal_variation", "label": "Tonal variation", "delta": -tonal_penalty, "reason": "Limited pitch variation."})
+    expr_penalty = int(round(_clamp01(max(0.0, 1.5 - expr_pm) / 1.5) * 10.0))
+    parts.append({"metric": "expression_change", "label": "Expressions", "delta": -expr_penalty, "reason": "Low expression dynamics."})
+    gesture_penalty = int(round(_clamp01(max(0.0, 2.0 - gestures_pm) / 2.0) * 8.0))
+    parts.append({"metric": "gestures", "label": "Gestures", "delta": -gesture_penalty, "reason": "Few purposeful gesture events."})
+    return sorted(parts, key=lambda x: x["delta"])
+
+
+def _select_metric_events(events: list[dict[str, Any]], metric: str, limit: int = 3) -> list[dict[str, Any]]:
+    target = {"expression_change": "expression_change"}.get(metric, metric)
+    out = [e for e in events if str(e.get("metric") or e.get("type") or "") == target]
+    out = sorted(out, key=lambda e: float(e.get("t0", 0.0)))
+    return out[:limit]
+
+
+def _story_for_metric(
+    *,
+    metric: str,
+    cards: dict[str, Any],
+    events: list[dict[str, Any]],
+    expr_pm: float,
+) -> dict[str, Any]:
+    if metric == "eye_contact":
+        score = int(round(_clamp01(float((cards.get("eye_contact", {}) or {}).get("on_camera_ratio") or 0.0)) * 100.0))
+        insight = "You are not maintaining enough eye contact." if score < 50 else "Your eye contact is fairly stable."
+        impact = "Low eye contact can reduce trust and audience connection."
+        cause = "Gaze often shifts away from camera during explanation."
+        actions = ["Look at camera at sentence endings.", "Place notes closer to webcam."]
+    elif metric == "filler_words":
+        pm = float((cards.get("filler_words", {}) or {}).get("per_minute") or 0.0)
+        score = int(round((1.0 - _clamp01(pm / 6.0)) * 100.0))
+        insight = "Filler usage is affecting fluency." if pm > 3 else "Filler usage is under control."
+        impact = "Frequent fillers weaken clarity and confidence."
+        cause = "Hesitation words appear during transitions and thinking pauses."
+        actions = ["Replace fillers with short silence.", "Slow down before key points."]
+    elif metric == "speech_rate":
+        wpm = float((cards.get("speech_rate", {}) or {}).get("wpm") or 0.0)
+        pace_ok = 95 <= wpm <= 160
+        score = int(round(max(0.0, 100.0 - abs((wpm - 130.0) / 1.8))))
+        insight = "Speech pace is outside the optimal range." if not pace_ok else "Speech pace is within a strong range."
+        impact = "Pace mismatch can reduce comprehension and emphasis."
+        cause = "Delivery speeds up or slows down around transitions."
+        actions = ["Target 95-160 WPM.", "Add deliberate pauses after key points."]
+    elif metric == "tonal_variation":
+        tv = float((cards.get("tonal_variation", {}) or {}).get("score") or 0.0)
+        score = int(round(_clamp01(tv / 60.0) * 100.0))
+        insight = "Tone sounds monotone in parts." if tv < 25 else "Tone has good variation."
+        impact = "Flat tone lowers engagement and message impact."
+        cause = "Pitch variation stays narrow during important statements."
+        actions = ["Emphasize key words with pitch change.", "Vary intonation between sections."]
+    elif metric == "expression_change":
+        score = int(round(_clamp01(expr_pm / 3.5) * 100.0))
+        insight = "Facial expression changes are limited." if expr_pm < 1.5 else "Expression dynamics are balanced."
+        impact = "Limited expressions can make delivery feel less engaging."
+        cause = "Expression remains neutral across multiple points."
+        actions = ["Use expression shifts to match message.", "Add visible emphasis on key moments."]
+    else:
+        gp = float((cards.get("gestures", {}) or {}).get("per_minute") or 0.0)
+        score = int(round(_clamp01(gp / 4.0) * 100.0))
+        insight = "Gestures are missing or unclear in key moments." if gp < 2 else "Gestures are generally supportive."
+        impact = "Weak gesture usage reduces delivery impact."
+        cause = "Hand movement is inconsistent or off-frame."
+        actions = ["Use one intentional gesture per key idea.", "Keep gestures visible at chest level."]
+
+    ev = _select_metric_events(events, metric, limit=3)
+    evidence = []
+    for e in ev:
+        t0 = float(e.get("t0", 0.0))
+        t1 = float(e.get("t1", t0 + 0.5))
+        desc = str(e.get("note") or e.get("message") or f"{_fmt_metric_name(metric)} issue")
+        evidence.append(
+            {
+                "start": round(t0, 3),
+                "end": round(t1, 3),
+                "description": desc,
+                "impact": impact,
+                "why_problem": "This pattern lowers communication effectiveness.",
+            }
+        )
+    if not evidence:
+        evidence = [{"start": 0.0, "end": 0.0, "description": "No strong issue segment detected.", "impact": impact, "why_problem": "No major issue signal in sampled windows."}]
+
+    return {
+        "metric": metric,
+        "score": max(0, min(100, int(score))),
+        "title": f"{_fmt_metric_name(metric)} ({max(0, min(100, int(score)))}%)",
+        "insight": insight,
+        "impact": impact,
+        "cause": cause,
+        "evidence": evidence,
+        "actions": actions[:3],
+    }
+
+
+def _coach_summary_payload(
+    *,
+    score_breakdown: list[dict[str, Any]],
+    confidence_score: int,
+    energy_score: int,
+) -> dict[str, Any]:
+    top = [x for x in score_breakdown if int(x.get("delta", 0)) < 0][:3]
+    priorities = [
+        {
+            "rank": i + 1,
+            "metric": str(t.get("metric", "")),
+            "title": f"Improve {_fmt_metric_name(str(t.get('metric', '')))}",
+            "reason": str(t.get("reason", "")),
+        }
+        for i, t in enumerate(top)
+    ]
+    lines = []
+    if confidence_score >= 70:
+        lines.append("You project solid confidence overall.")
+    else:
+        lines.append("Your confidence signal is moderate and can improve with a few focused fixes.")
+    if energy_score >= 70:
+        lines.append("Your delivery energy is a strength.")
+    else:
+        lines.append("Energy dips are reducing impact in parts of the video.")
+    if top:
+        lines.append(f"Highest impact fix: {_fmt_metric_name(str(top[0].get('metric', '')))}.")
+    return {
+        "overall": " ".join(lines[:3]),
+        "top_priorities": priorities,
+        "confidence_explanation": (
+            f"Confidence score is {confidence_score}/100, derived from eye contact, filler control, and gesture consistency."
+        ),
+    }
+
+
 class Orchestrator:
     def __init__(self) -> None:
+        self.planner = PlannerAgent()
         self.speech = SpeechAgent()
         self.vision = VisionAgent()
         self.fusion = BehaviorFusionAgent()
@@ -252,10 +411,26 @@ class Orchestrator:
 
     def run(self, db: Session, job: Job, *, normalized_video: str, wav_path: str) -> dict[str, Any]:
         _set_progress(db, job, stage="preprocessed", progress=0.2)
+        agent_trace: list[dict[str, Any]] = []
+        plan = self.planner.initial_plan(duration_sec=int(job.duration_sec or 0))
+        agent_trace.append({"agent": "planner", "step": "initial_plan", "plan": plan})
 
         with ThreadPoolExecutor(max_workers=2) as ex:
-            f_speech = ex.submit(self.speech.run, wav_path, duration_sec=job.duration_sec)
-            f_vision = ex.submit(self.vision.run, normalized_video, duration_sec=job.duration_sec)
+            f_speech = ex.submit(
+                self.speech.run,
+                wav_path,
+                duration_sec=job.duration_sec,
+                model_override=plan.get("speech_model"),
+                compute_type_override=plan.get("speech_compute_type"),
+            )
+            f_vision = ex.submit(
+                self.vision.run,
+                normalized_video,
+                duration_sec=job.duration_sec,
+                target_fps_override=plan.get("vision_fps"),
+                max_frames_override=plan.get("vision_max_frames"),
+                width_override=plan.get("vision_width"),
+            )
 
             _set_progress(db, job, stage="running_agents", progress=0.35)
             _set_progress(db, job, stage="speech_running", progress=0.40)
@@ -265,13 +440,82 @@ class Orchestrator:
             vision_out = f_vision.result()
             _set_progress(db, job, stage="vision_done", progress=0.75)
 
+        speech_retry_needed = bool(getattr(speech_out, "low_speech_detected", False) or int(getattr(speech_out, "words", 0) or 0) < 20)
+        if speech_retry_needed:
+            speech_retry = self.planner.speech_retry_plan(
+                previous_model=plan.get("speech_model"),
+                words=int(getattr(speech_out, "words", 0) or 0),
+            )
+            agent_trace.append({"agent": "planner", "step": "speech_retry_plan", "plan": speech_retry})
+            if speech_retry.get("reason") != "no_retry":
+                _set_progress(db, job, stage="speech_retry", progress=0.7)
+                speech_out = self.speech.run(
+                    wav_path,
+                    duration_sec=job.duration_sec,
+                    model_override=speech_retry.get("speech_model"),
+                    compute_type_override=speech_retry.get("speech_compute_type"),
+                )
+                agent_trace.append(
+                    {
+                        "agent": "speech",
+                        "step": "retry",
+                        "reason": speech_retry.get("reason"),
+                        "model": speech_retry.get("speech_model"),
+                        "words": int(getattr(speech_out, "words", 0) or 0),
+                    }
+                )
+
+        vision_retry_needed = bool((vision_out.eye_contact or {}).get("not_measurable") or float((vision_out.quality or {}).get("face_visible_ratio", 0.0) or 0.0) < 0.05)
+        if vision_retry_needed:
+            vision_retry = self.planner.vision_retry_plan()
+            agent_trace.append({"agent": "planner", "step": "vision_retry_plan", "plan": vision_retry})
+            _set_progress(db, job, stage="vision_retry", progress=0.73)
+            vision_out = self.vision.run(
+                normalized_video,
+                duration_sec=job.duration_sec,
+                target_fps_override=vision_retry.get("vision_fps"),
+                max_frames_override=vision_retry.get("vision_max_frames"),
+                width_override=vision_retry.get("vision_width"),
+            )
+            agent_trace.append(
+                {
+                    "agent": "vision",
+                    "step": "retry",
+                    "reason": vision_retry.get("reason"),
+                    "face_visible_ratio": float((vision_out.quality or {}).get("face_visible_ratio", 0.0) or 0.0),
+                }
+            )
+
         fusion_out = self.fusion.run(speech_out, vision_out)
+        agent_trace.append(
+            {
+                "agent": "fusion",
+                "step": "run",
+                "engagement_score": int(getattr(fusion_out, "engagement_score", 0) or 0),
+                "confidence_score": int(getattr(fusion_out, "confidence_score", 0) or 0),
+            }
+        )
         _set_progress(db, job, stage="fusion_done", progress=0.82)
 
         scoring_out = self.scoring.run(speech_out, vision_out, fusion_out)
+        agent_trace.append(
+            {
+                "agent": "scoring",
+                "step": "run",
+                "overall_score": int(getattr(scoring_out, "overall_score", 0) or 0),
+            }
+        )
         _set_progress(db, job, stage="scoring_done", progress=0.90)
 
         feedback_out = self.feedback.run(speech_out, vision_out, fusion_out, scoring_out)
+        agent_trace.append(
+            {
+                "agent": "feedback",
+                "step": "run",
+                "strengths": len(getattr(feedback_out, "strengths", []) or []),
+                "suggestions": len(getattr(feedback_out, "suggestions", []) or []),
+            }
+        )
         _set_progress(db, job, stage="feedback_done", progress=0.96)
 
         # Consolidated result payload for the UI + storage.
@@ -463,6 +707,25 @@ class Orchestrator:
             tonal_variation=tonal_std,
             expression_changes_per_min=expr_pm,
         )
+        score_breakdown = _metric_score_breakdown(cards, expr_pm=expr_pm)
+        priorities = [
+            {
+                "metric": str(x.get("metric", "")),
+                "title": f"Fix {_fmt_metric_name(str(x.get('metric', '')))} first",
+                "impact": "High" if i == 0 else "Medium",
+                "why_now": str(x.get("reason", "")),
+            }
+            for i, x in enumerate([s for s in score_breakdown if int(s.get("delta", 0)) < 0][:3])
+        ]
+        metric_stories = [
+            _story_for_metric(metric=m, cards=cards, events=events, expr_pm=expr_pm)
+            for m in ["eye_contact", "filler_words", "speech_rate", "tonal_variation", "expression_change", "gestures"]
+        ]
+        coach_summary = _coach_summary_payload(
+            score_breakdown=score_breakdown,
+            confidence_score=confidence_score,
+            energy_score=energy_score,
+        )
 
         return {
             "summary": {
@@ -486,6 +749,10 @@ class Orchestrator:
             "engagement_drops": engagement_drop_events,
             "confidence_score": confidence_score,
             "energy_score": energy_score,
+            "coach_summary": coach_summary,
+            "score_breakdown": score_breakdown,
+            "priorities": priorities,
+            "metric_stories": metric_stories,
             "best_moments": best_moments,
             "worst_moments": refined_worst or worst_moments,
             "pauses": pauses,
@@ -494,6 +761,7 @@ class Orchestrator:
             "quality": vision_out.quality,
             "transcript": {"text": speech_out.transcript[:20000]},
             "debug": {
+                "agent_trace": agent_trace,
                 "speech_segments": speech_out.segments[:200],
                 "timed_words_count": len(getattr(speech_out, "words_timed", []) or []),
                 "speech_duration_sec": float(getattr(speech_out, "duration_sec", 0.0) or 0.0),
