@@ -19,3 +19,10 @@ librosa==0.10.2.post1
 soundfile==0.12.1
 praat-parselmouth==0.4.5
 
+# Vision upgrades
+insightface==0.7.3
+# CPU build avoids CUDA DLL errors on machines without a working NVIDIA stack.
+# For GPU: pip uninstall onnxruntime && pip install onnxruntime-gpu==1.19.2 and set VISION_INSIGHTFACE_GPU=true
+onnxruntime==1.19.2
+scenedetect[opencv]==0.6.4
+

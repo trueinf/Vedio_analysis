@@ -38,6 +38,7 @@ import { MetricStoryCard } from "../components/MetricStoryCard";
 import { ScoreSimulator } from "../components/ScoreSimulator";
 import { ClipPlayer } from "../components/ClipPlayer";
 import { CoachingPlan } from "../components/CoachingPlan";
+import type { MetricDetailContext, TimelineBinRow } from "../components/metricDetailContent";
 import { MetricEvent, MetricKey } from "../components/video-analysis-types";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 const MultiMetricTimeline = dynamic(() => import("../components/MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
@@ -491,6 +492,34 @@ export default function Page() {
       }[],
     };
   }, [result]);
+
+  const metricDetailContext = useMemo<MetricDetailContext | null>(() => {
+    if (!result) return null;
+    const tl = (result.timeline ?? {}) as { bin_size_sec?: number; bins?: unknown[] };
+    const transcript = result.transcript;
+    const text =
+      transcript && typeof transcript === "object" && transcript !== null && "text" in transcript
+        ? String((transcript as { text: string }).text)
+        : "";
+    return {
+      durationSec: Number(result.summary?.duration_sec ?? 0),
+      binSizeSec: Number(tl.bin_size_sec ?? 10),
+      timelineBins: (tl.bins ?? []) as TimelineBinRow[],
+      rawCards: (result.cards ?? null) as Record<string, unknown> | null,
+      transcriptPreview: text ? text.slice(0, 800) : null,
+      debug: (result.debug ?? null) as MetricDetailContext["debug"],
+      summary: result.summary
+        ? {
+            overall_score:
+              typeof result.summary.overall_score === "number" ? result.summary.overall_score : undefined,
+            warnings: Array.isArray(result.summary.warnings) ? (result.summary.warnings as string[]) : undefined,
+          }
+        : null,
+      quality: (result.quality ?? null) as Record<string, unknown> | null,
+      speakers: Array.isArray(result.speakers) ? (result.speakers as Record<string, unknown>[]) : null,
+    };
+  }, [result]);
+
   const allEvents = useMemo(() => (result?.events ?? []) as MetricEvent[], [result?.events]);
   const filteredEvents = useMemo(
     () =>
@@ -877,6 +906,10 @@ export default function Page() {
               exprChangesPerMin: cards.exprChangesPerMin,
               exprBadge: cards.exprBadge,
             }}
+            events={allEvents}
+            durationSec={Number(cards.durationSec || 0)}
+            eyeNotMeasurable={Boolean(result?.cards?.eye_contact?.not_measurable)}
+            metricDetailContext={metricDetailContext}
           />
 
           {cards.durationSec > 0 && cards.events?.length > 0 && showTimelineSlide ? (

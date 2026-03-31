@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Optional: enables diarization if set and deps installed
     hf_token: str | None = None
 
+    # InsightFace: True only with onnxruntime-gpu + working CUDA. False = CPU (typical Windows / no GPU).
+    vision_insightface_gpu: bool = False
+
 
 settings = Settings()
 

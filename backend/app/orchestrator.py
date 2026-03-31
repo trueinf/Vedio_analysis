@@ -788,6 +788,7 @@ class Orchestrator:
             "clips": clips,
             "coach_comments": coach_comments,
             "quality": vision_out.quality,
+            "speakers": getattr(vision_out, "speakers", []) or [],
             "transcript": {"text": speech_out.transcript[:20000]},
             "debug": {
                 "agent_trace": agent_trace,

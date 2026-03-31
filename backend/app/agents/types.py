@@ -28,6 +28,7 @@ class VisionAgentOutput:
     quality: dict[str, Any]
     timeline_bins: list[dict[str, Any]]
     metric_events: list[dict[str, Any]]
+    speakers: list[dict[str, Any]] = None  # type: ignore[assignment]
 
 
 @dataclass
