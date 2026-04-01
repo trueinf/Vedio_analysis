@@ -23,7 +23,9 @@ soundfile==0.12.1
 praat-parselmouth==0.4.5
 
 # Vision upgrades
-insightface==0.7.3
+# InsightFace is optional. On Linux (e.g. Railway slim images) pip often tries to build from source
+# and fails due to missing build deps / no wheels. The app gracefully falls back when it's absent.
+insightface==0.7.3; platform_system == "Windows"
 # CPU build avoids CUDA DLL errors on machines without a working NVIDIA stack.
 # For GPU: pip uninstall onnxruntime && pip install onnxruntime-gpu==1.19.2 and set VISION_INSIGHTFACE_GPU=true
 onnxruntime==1.19.2
