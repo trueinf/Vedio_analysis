@@ -115,6 +115,12 @@ export function AnalysisDrawer(props: {
     };
   }, [result]);
 
+  const eyeNotMeasurable = useMemo(() => {
+    const c = result?.cards ?? {};
+    const eye = (c.eye_contact ?? {}) as any;
+    return Boolean(eye?.not_measurable) || String(eye?.reason || "").toLowerCase().includes("not measurable");
+  }, [result]);
+
   if (!props.open) return null;
 
   const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
@@ -164,6 +170,9 @@ export function AnalysisDrawer(props: {
                   exprChangesPerMin: cards.exprChangesPerMin,
                   exprBadge: cards.exprBadge,
                 }}
+                events={cards.events}
+                durationSec={cards.durationSec}
+                eyeNotMeasurable={eyeNotMeasurable}
               />
 
               <MultiMetricTimeline
