@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     # Server-side key for backend/worker writes (DO NOT expose to frontend)
     supabase_service_role_key: str = ""
+    # Alias for compatibility with deployments that use SUPABASE_SERVICE_KEY.
+    # Prefer setting SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY in env.
+    supabase_service_key: str = ""
     supabase_bucket: str = "videos"
     # Max object size for the Storage bucket (bytes). Applied on ensure-bucket via update_bucket.
     # Supabase Free tier may still enforce a lower project-wide cap; raise in Dashboard or upgrade if uploads fail.

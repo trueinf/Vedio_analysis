@@ -10,14 +10,27 @@ from app.settings import settings
 
 
 def _configured() -> bool:
-    return bool(settings.supabase_url and settings.supabase_service_role_key)
+    key = (settings.supabase_service_role_key or settings.supabase_service_key or "").strip()
+    return bool(settings.supabase_url.strip() and key)
 
 
 def _client():
     # Lazy import so local dev still works without Supabase configured.
     from supabase import create_client  # type: ignore
 
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    key = (settings.supabase_service_role_key or settings.supabase_service_key or "").strip()
+    return create_client(settings.supabase_url, key)
+
+
+_WARNED_NOT_CONFIGURED = False
+
+
+def _warn_not_configured() -> None:
+    global _WARNED_NOT_CONFIGURED
+    if _WARNED_NOT_CONFIGURED:
+        return
+    _WARNED_NOT_CONFIGURED = True
+    print("[Supabase] Not configured (SUPABASE_URL + service key missing). Skipping Supabase persistence.")
 
 
 def _bucket_file_size_limit() -> int:
@@ -42,6 +55,7 @@ def ensure_bucket_exists(bucket_name: str) -> None:
     Requires service role key.
     """
     if not _configured():
+        _warn_not_configured()
         return
     sb = _client()
     name = (bucket_name or "").strip()
@@ -110,12 +124,14 @@ def upsert_analysis_row(
     error_message: str = "",
 ) -> None:
     if not _configured():
+        _warn_not_configured()
         return
     sb = _client()
     now = datetime.utcnow().isoformat()
     sb.table("analyses").upsert(
         {
-            "id": analysis_id,
+            # New schema uses job_id as the stable identifier.
+            "job_id": analysis_id,
             "updated_at": now,
             "source_type": source_type,
             "source_url": source_url or "",
@@ -132,30 +148,34 @@ def upsert_analysis_row(
 
 def update_analysis_status(*, analysis_id: str, status: str, stage: str, progress: float, error_message: str = "") -> None:
     if not _configured():
+        _warn_not_configured()
         return
     sb = _client()
-    sb.table("analyses").update(
+    # Use upsert keyed by job_id for compatibility with new schema.
+    sb.table("analyses").upsert(
         {
+            "job_id": analysis_id,
             "updated_at": datetime.utcnow().isoformat(),
             "status": status,
             "stage": stage,
             "progress": float(progress or 0.0),
             "error_message": error_message or "",
         }
-    ).eq("id", analysis_id).execute()
+    ).execute()
 
 
 def put_result_json(*, analysis_id: str, result: dict[str, Any], result_version: str = "v1") -> None:
     if not _configured():
+        _warn_not_configured()
         return
     sb = _client()
-    sb.table("analysis_results").upsert(
-        {"analysis_id": analysis_id, "result_version": result_version, "result_json": result}
-    ).execute()
+    # New schema stores the full payload on analyses.result_json.
+    sb.table("analyses").upsert({"job_id": analysis_id, "result_json": result}).execute()
 
 
 def list_analyses(limit: int = 200) -> list[dict[str, Any]]:
     if not _configured():
+        _warn_not_configured()
         return []
     sb = _client()
     res = (
@@ -170,18 +190,20 @@ def list_analyses(limit: int = 200) -> list[dict[str, Any]]:
 
 def get_analysis(analysis_id: str) -> dict[str, Any] | None:
     if not _configured():
+        _warn_not_configured()
         return None
     sb = _client()
-    res = sb.table("analyses").select("*").eq("id", analysis_id).limit(1).execute()
+    res = sb.table("analyses").select("*").eq("job_id", analysis_id).limit(1).execute()
     rows = list(res.data or [])
     return rows[0] if rows else None
 
 
 def get_result(analysis_id: str) -> dict[str, Any] | None:
     if not _configured():
+        _warn_not_configured()
         return None
     sb = _client()
-    res = sb.table("analysis_results").select("result_json").eq("analysis_id", analysis_id).limit(1).execute()
+    res = sb.table("analyses").select("result_json").eq("job_id", analysis_id).limit(1).execute()
     rows = list(res.data or [])
     if not rows:
         return None
@@ -194,6 +216,7 @@ def upload_file_to_storage(*, local_path: str, storage_path: str, content_type: 
     Returns the storage_path that was used.
     """
     if not _configured():
+        _warn_not_configured()
         return storage_path
     sb = _client()
     bucket = sb.storage.from_(settings.supabase_bucket)
