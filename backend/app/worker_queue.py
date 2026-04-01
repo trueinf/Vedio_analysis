@@ -26,3 +26,21 @@ def enqueue_job(job_id: str) -> None:
         t = threading.Thread(target=process_job, args=(job_id,), daemon=True)
         t.start()
 
+
+def enqueue_task(func_path: str, *args) -> None:
+    # Like enqueue_job, but for arbitrary worker tasks.
+    try:
+        q = get_queue()
+        q.connection.ping()
+        q.enqueue(func_path, *args)
+    except Exception:
+        # Inline fallback: import and run in a thread.
+        import importlib
+        import threading
+
+        mod_name, fn_name = func_path.rsplit(".", 1)
+        mod = importlib.import_module(mod_name)
+        fn = getattr(mod, fn_name)
+        t = threading.Thread(target=fn, args=args, daemon=True)
+        t.start()
+

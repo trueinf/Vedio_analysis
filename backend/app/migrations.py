@@ -87,3 +87,58 @@ def ensure_agent_tables(engine: Engine) -> None:
     except Exception:
         return
 
+
+def ensure_youtube_tables(engine: Engine) -> None:
+    # Create tables if missing (SQLite).
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS youtube_channels ("
+                    "id VARCHAR(36) PRIMARY KEY,"
+                    "created_at DATETIME NOT NULL,"
+                    "handle VARCHAR(256) NOT NULL UNIQUE,"
+                    "channel_id VARCHAR(64) NOT NULL DEFAULT '',"
+                    "title VARCHAR(512) NOT NULL DEFAULT '',"
+                    "last_ingest_id VARCHAR(36) NOT NULL DEFAULT '',"
+                    "last_benchmark_json TEXT NOT NULL DEFAULT '{}',"
+                    "last_benchmark_sample_size INTEGER NOT NULL DEFAULT 0,"
+                    "last_benchmark_updated_at DATETIME NOT NULL"
+                    ")"
+                )
+            )
+            c.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS youtube_ingests ("
+                    "id VARCHAR(36) PRIMARY KEY,"
+                    "created_at DATETIME NOT NULL,"
+                    "updated_at DATETIME NOT NULL,"
+                    "channel_handle VARCHAR(256) NOT NULL,"
+                    "requested_video_count INTEGER NOT NULL DEFAULT 10,"
+                    "status VARCHAR(32) NOT NULL DEFAULT 'queued',"
+                    "message TEXT NOT NULL DEFAULT ''"
+                    ")"
+                )
+            )
+            c.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS youtube_videos ("
+                    "id VARCHAR(36) PRIMARY KEY,"
+                    "created_at DATETIME NOT NULL,"
+                    "updated_at DATETIME NOT NULL,"
+                    "ingest_id VARCHAR(36) NOT NULL,"
+                    "channel_handle VARCHAR(256) NOT NULL,"
+                    "youtube_video_id VARCHAR(32) NOT NULL,"
+                    "title VARCHAR(512) NOT NULL DEFAULT '',"
+                    "url VARCHAR(1024) NOT NULL DEFAULT '',"
+                    "video_path VARCHAR(1024) NOT NULL DEFAULT '',"
+                    "job_id VARCHAR(36) NOT NULL DEFAULT '',"
+                    "status VARCHAR(32) NOT NULL DEFAULT 'queued',"
+                    "error_message TEXT NOT NULL DEFAULT '',"
+                    "FOREIGN KEY(ingest_id) REFERENCES youtube_ingests(id)"
+                    ")"
+                )
+            )
+    except Exception:
+        return
+

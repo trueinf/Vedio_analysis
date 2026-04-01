@@ -59,6 +59,18 @@ class UploadResponse(BaseModel):
     message: str = Field(default="uploaded")
 
 
+class YouTubeJobIn(BaseModel):
+    url: str = Field(default="", description="YouTube video URL")
+    channel_name: str = ""
+
+
+class SupabaseStorageJobIn(BaseModel):
+    storage_path: str = Field(default="", description="Supabase Storage object path (within bucket)")
+    original_filename: str = Field(default="upload.mp4")
+    channel_name: str = ""
+
+
+
 class BatchUploadResponse(BaseModel):
     jobs: list[UploadResponse]
     collection_id: str = ""
@@ -125,4 +137,30 @@ class ComparisonIn(BaseModel):
 
 class ComparisonOut(BaseModel):
     report: dict[str, Any]
+
+
+class YouTubeIngestCreateIn(BaseModel):
+    channel: str = Field(default="", description="Channel handle like @name or URL")
+    video_count: int = 10
+
+
+class YouTubeIngestCreateOut(BaseModel):
+    ingest_id: str
+    status: str
+    channel_handle: str
+    message: str = ""
+
+
+class YouTubeIngestStatusOut(BaseModel):
+    ingest_id: str
+    status: str
+    channel_handle: str
+    requested_video_count: int
+    message: str = ""
+    total_videos: int = 0
+    completed_videos: int = 0
+    failed_videos: int = 0
+    processing_videos: int = 0
+    benchmark_ready: bool = False
+    benchmark_sample_size: int = 0
 

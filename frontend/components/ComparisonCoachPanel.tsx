@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Card, PremiumField, PremiumChip, premiumSurfaceClass } from "./ui";
+import { createYouTubeChannelIngest, getYouTubeIngestStatus, YouTubeIngestStatus } from "@/lib/api";
 
 type ComparisonReport = {
   summary?: {
@@ -32,6 +33,10 @@ function formatTime(sec: number): string {
 
 export function ComparisonCoachPanel(props: {
   jobId: string | null;
+  jobStatus?: string;
+  jobOptions?: { id: string; label: string; status: string }[];
+  selectedJobId?: string | null;
+  onSelectJobId?: (jobId: string) => void;
   onSeek: (start: number, end?: number) => void;
   onGenerate: (input: {
     job_id: string;
@@ -54,14 +59,26 @@ export function ComparisonCoachPanel(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [report, setReport] = useState<ComparisonReport | null>(null);
+  const [ingestId, setIngestId] = useState<string>("");
+  const [ingest, setIngest] = useState<YouTubeIngestStatus | null>(null);
+  const [ingesting, setIngesting] = useState(false);
+
+  const normalizedCompetitor = useMemo(() => competitor.trim(), [competitor]);
+  const effectiveJobId = (props.selectedJobId || props.jobId || "").trim();
+  const effectiveJobStatus: string | undefined =
+    props.jobOptions?.find((j) => j.id === effectiveJobId)?.status || props.jobStatus || undefined;
 
   async function run() {
-    if (!props.jobId) return;
+    if (!effectiveJobId) return;
+    if (effectiveJobStatus && effectiveJobStatus !== "completed") {
+      setError("Wait for analysis to complete, then generate comparison.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const res = await props.onGenerate({
-        job_id: props.jobId,
+        job_id: effectiveJobId,
         source_type: "upload",
         compare_mode: compareMode,
         niche,
@@ -80,9 +97,71 @@ export function ComparisonCoachPanel(props: {
     }
   }
 
+  async function buildBenchmark() {
+    if (!normalizedCompetitor) return;
+    setError("");
+    setIngesting(true);
+    try {
+      const res = await createYouTubeChannelIngest({ channel: normalizedCompetitor, video_count: 10 });
+      setIngestId(res.ingest_id);
+    } catch (e: any) {
+      setError(e?.message ?? "YouTube ingest failed");
+      setIngesting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!ingestId) return;
+    let alive = true;
+    let t: any = null;
+    async function tick() {
+      try {
+        const s = await getYouTubeIngestStatus(ingestId);
+        if (!alive) return;
+        setIngest(s);
+        if (s.benchmark_ready || s.status === "failed") {
+          setIngesting(false);
+          return;
+        }
+      } catch (e: any) {
+        if (!alive) return;
+        setError(e?.message ?? "Failed to poll ingest");
+      }
+      t = setTimeout(tick, 2500);
+    }
+    tick();
+    return () => {
+      alive = false;
+      if (t) clearTimeout(t);
+    };
+  }, [ingestId]);
+
   return (
     <Card className={`col-span-12 p-4 rounded-xl ${premiumSurfaceClass}`}>
       <div className="text-sm font-semibold">You vs Top Creators</div>
+      {props.jobOptions?.length ? (
+        <div className="mt-3 grid grid-cols-1 lg:grid-cols-6 gap-2">
+          <div className="lg:col-span-2">
+            <div className="text-xs text-slate-300 mb-1">Compare this job</div>
+            <select
+              value={effectiveJobId}
+              onChange={(e) => props.onSelectJobId?.(e.target.value)}
+              className="w-full text-sm border border-white/15 bg-white/5 rounded-md px-2 py-1 text-white"
+            >
+              {props.jobOptions.map((j) => (
+                <option key={j.id} value={j.id}>
+                  {j.label} · {j.status}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="lg:col-span-4 text-xs text-slate-300 flex items-end">
+            {effectiveJobStatus && effectiveJobStatus !== "completed"
+              ? "Select a completed job to generate comparison."
+              : ""}
+          </div>
+        </div>
+      ) : null}
       <div className="mt-3 grid grid-cols-1 lg:grid-cols-6 gap-2">
         <div className="lg:col-span-2">
           <div className="text-xs text-slate-300 mb-1">Compare mode</div>
@@ -111,11 +190,48 @@ export function ComparisonCoachPanel(props: {
         />
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <Button variant="premium" onClick={run} disabled={!props.jobId || busy}>
+        <Button
+          variant="premium"
+          onClick={run}
+          disabled={!effectiveJobId || busy || (!!effectiveJobStatus && effectiveJobStatus !== "completed")}
+        >
           {busy ? "Generating..." : "Generate Comparison Report"}
         </Button>
+        {compareMode === "specific_channel" ? (
+          <Button
+            variant="premium-ghost"
+            onClick={buildBenchmark}
+            disabled={!normalizedCompetitor || ingesting}
+            title="Fetch recent videos from this channel and build a real benchmark"
+          >
+            {ingestId ? (ingesting ? "Building benchmark..." : "Benchmark status") : "Build real benchmark"}
+          </Button>
+        ) : null}
         {error ? <div className="text-xs text-red-300">{error}</div> : null}
       </div>
+
+      {compareMode === "specific_channel" && ingest ? (
+        <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-slate-200">
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <div>
+              <span className="text-slate-400">Channel</span> {ingest.channel_handle}
+            </div>
+            <div>
+              <span className="text-slate-400">Status</span> {ingest.status}
+            </div>
+            <div>
+              <span className="text-slate-400">Videos</span> {ingest.completed_videos}/{ingest.total_videos} completed
+              {ingest.processing_videos ? ` · ${ingest.processing_videos} processing` : ""}
+              {ingest.failed_videos ? ` · ${ingest.failed_videos} failed` : ""}
+            </div>
+            <div>
+              <span className="text-slate-400">Benchmark</span>{" "}
+              {ingest.benchmark_ready ? `ready (n=${ingest.benchmark_sample_size})` : "not ready"}
+            </div>
+          </div>
+          {ingest.message ? <div className="mt-2 text-slate-300">{ingest.message}</div> : null}
+        </div>
+      ) : null}
 
       {report ? (
         <div className="mt-4 space-y-4">

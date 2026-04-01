@@ -24,6 +24,34 @@ export type JobHistoryItem = {
   has_result: boolean;
 };
 
+export type AnalysisRow = {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  source_type: string;
+  source_url: string;
+  title: string;
+  video_storage_path: string;
+  duration_sec: number;
+  status: JobStatus;
+  stage: string;
+  progress: number;
+  error_message: string;
+};
+
+export async function listAnalyses(limit = 200): Promise<{ analyses: AnalysisRow[] }> {
+  const res = await fetch(`${API_BASE}/api/analyses?limit=${limit}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Analyses list failed (${res.status})`);
+  return await res.json();
+}
+
+export async function getAnalysisResult(analysisId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/analyses/${analysisId}/result`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Analysis result fetch failed (${res.status})`);
+  const data = await res.json();
+  return data.result;
+}
+
 export type ChannelItem = {
   id: string;
   name: string;
@@ -61,7 +89,48 @@ export async function getComparisonReport(payload: ComparisonInput): Promise<any
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Comparison report failed (${res.status})`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const data = await res.json();
+      detail = (data?.detail ? `: ${data.detail}` : "") as string;
+    } catch {
+      // ignore
+    }
+    throw new Error(`Comparison report failed (${res.status})${detail}`);
+  }
+  return await res.json();
+}
+
+export type YouTubeIngestCreateInput = { channel: string; video_count?: number };
+export type YouTubeIngestCreateOutput = { ingest_id: string; status: string; channel_handle: string; message?: string };
+export type YouTubeIngestStatus = {
+  ingest_id: string;
+  status: string;
+  channel_handle: string;
+  requested_video_count: number;
+  message?: string;
+  total_videos: number;
+  completed_videos: number;
+  failed_videos: number;
+  processing_videos: number;
+  benchmark_ready: boolean;
+  benchmark_sample_size: number;
+};
+
+export async function createYouTubeChannelIngest(payload: YouTubeIngestCreateInput): Promise<YouTubeIngestCreateOutput> {
+  const res = await fetch(`${API_BASE}/api/youtube/channel/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel: payload.channel, video_count: payload.video_count ?? 10 }),
+  });
+  if (!res.ok) throw new Error(`YouTube ingest failed (${res.status})`);
+  return await res.json();
+}
+
+export async function getYouTubeIngestStatus(ingestId: string): Promise<YouTubeIngestStatus> {
+  const res = await fetch(`${API_BASE}/api/youtube/ingest/${ingestId}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`YouTube ingest status failed (${res.status})`);
   return await res.json();
 }
 
@@ -95,6 +164,16 @@ export async function uploadVideos(
   if (collectionTitle.trim()) form.append("collection_title", collectionTitle.trim());
   const res = await fetch(`${API_BASE}/api/jobs/upload/batch`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`Batch upload failed (${res.status})`);
+  return await res.json();
+}
+
+export async function createJobFromYouTubeUrl(url: string): Promise<{ job_id: string; status: JobStatus }> {
+  const res = await fetch(`${API_BASE}/api/jobs/from-youtube`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error(`YouTube URL job failed (${res.status})`);
   return await res.json();
 }
 

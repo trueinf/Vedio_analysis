@@ -10,10 +10,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.101.0",
     "clsx": "2.1.1",
     "framer-motion": "^12.38.0",
     "html2canvas": "^1.4.1",
     "next": "15.5.14",
+    "recharts": "^3.2.1",
     "react": "19.0.3",
     "react-dom": "19.0.3"
   },
@@ -21,6 +23,7 @@
     "@types/node": "22.10.2",
     "@types/react": "19.0.2",
     "@types/react-dom": "19.0.2",
+    "@types/recharts": "^1.8.29",
     "autoprefixer": "10.4.20",
     "eslint": "9.39.4",
     "eslint-config-next": "15.5.14",

@@ -80,3 +80,73 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     feedback_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
+
+class YouTubeIngestStatus(str, enum.Enum):
+    queued = "queued"
+    processing = "processing"
+    ready = "ready"
+    failed = "failed"
+
+
+class YouTubeChannel(Base):
+    __tablename__ = "youtube_channels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # normalized: "@handle" (preferred) or "UC..." id
+    handle: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    title: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+
+    last_ingest_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    last_benchmark_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    last_benchmark_sample_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_benchmark_updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class YouTubeIngest(Base):
+    __tablename__ = "youtube_ingests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    channel_handle: Mapped[str] = mapped_column(String(256), nullable=False)
+    requested_video_count: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+
+    status: Mapped[YouTubeIngestStatus] = mapped_column(
+        Enum(YouTubeIngestStatus), default=YouTubeIngestStatus.queued, nullable=False
+    )
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
+class YouTubeVideoStatus(str, enum.Enum):
+    queued = "queued"
+    downloaded = "downloaded"
+    analyzing = "analyzing"
+    completed = "completed"
+    failed = "failed"
+
+
+class YouTubeVideo(Base):
+    __tablename__ = "youtube_videos"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    ingest_id: Mapped[str] = mapped_column(String(36), ForeignKey("youtube_ingests.id"), nullable=False)
+    channel_handle: Mapped[str] = mapped_column(String(256), nullable=False)
+
+    youtube_video_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    url: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+
+    video_path: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+    job_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
+    status: Mapped[YouTubeVideoStatus] = mapped_column(
+        Enum(YouTubeVideoStatus), default=YouTubeVideoStatus.queued, nullable=False
+    )
+    error_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+

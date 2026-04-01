@@ -10,15 +10,43 @@ export type UploadJobListItem = {
   progress: number;
 };
 
+function getYouTubeVideoId(input: string): string | null {
+  const raw = (input || "").trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const host = url.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") {
+      const id = url.pathname.replace(/^\//, "").split("/")[0];
+      return id || null;
+    }
+    if (host.endsWith("youtube.com")) {
+      if (url.pathname === "/watch") return url.searchParams.get("v");
+      const m = url.pathname.match(/\/shorts\/([^/?#]+)/);
+      if (m?.[1]) return m[1];
+      const e = url.pathname.match(/\/embed\/([^/?#]+)/);
+      if (e?.[1]) return e[1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function VideoUploadPanel(props: {
   jobId: string | null;
   localVideoUrl: string;
   demoMode: boolean;
   channelName: string;
   onChannelNameChange: (v: string) => void;
+  youtubeUrl: string;
+  onYoutubeUrlChange: (v: string) => void;
+  ytIngest: any | null;
+  ytIngesting: boolean;
   onPickFiles: (files: File[]) => void;
   onAnalyze: () => void;
   onRefresh: () => void;
+  onClearHistory?: () => void;
   canAnalyze: boolean;
   canRefresh: boolean;
   selectedFilesCount: number;
@@ -33,6 +61,10 @@ export function VideoUploadPanel(props: {
   onVideoLoadedMetadata: (duration: number) => void;
   onVideoTimeUpdate: (time: number) => void;
 }) {
+  const ytId = getYouTubeVideoId(props.youtubeUrl);
+  const ytEmbedSrc = ytId
+    ? `https://www.youtube.com/embed/${ytId}?autoplay=0&rel=0&modestbranding=1&playsinline=1`
+    : "";
   return (
     <Card
       id="demo-problem"
@@ -52,6 +84,15 @@ export function VideoUploadPanel(props: {
             onLoadedMetadata={(e) => props.onVideoLoadedMetadata(Number(e.currentTarget.duration || 0))}
             onTimeUpdate={(e) => props.onVideoTimeUpdate(Number(e.currentTarget.currentTime || 0))}
           />
+        ) : ytEmbedSrc ? (
+          <iframe
+            className="w-full h-full bg-black"
+            src={ytEmbedSrc}
+            title="YouTube video preview"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerPolicy="strict-origin-when-cross-origin"
+            allowFullScreen
+          />
         ) : (
           "Video preview will appear here (optional)"
         )}
@@ -61,6 +102,11 @@ export function VideoUploadPanel(props: {
           value={props.channelName}
           onChange={props.onChannelNameChange}
           placeholder="Channel name (e.g. ifan)"
+        />
+        <PremiumField
+          value={props.youtubeUrl}
+          onChange={props.onYoutubeUrlChange}
+          placeholder="Or paste YouTube link (https://www.youtube.com/watch?v=...)"
         />
         <input
           type="file"
@@ -89,8 +135,39 @@ export function VideoUploadPanel(props: {
         ) : null}
         {props.jobError ? <div className="text-sm text-bad">{props.jobError}</div> : null}
       </div>
+
+      {!props.demoMode && props.ytIngest ? (
+        <div className="mt-3 rounded-lg border border-white/10 bg-white/5 p-3 text-xs text-slate-200">
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <div>
+              <span className="text-slate-400">YouTube ingest</span> {props.ytIngest.channel_handle}
+            </div>
+            <div>
+              <span className="text-slate-400">Status</span> {props.ytIngest.status}
+            </div>
+            <div>
+              <span className="text-slate-400">Videos</span> {props.ytIngest.completed_videos}/{props.ytIngest.total_videos} completed
+              {props.ytIngest.processing_videos ? ` · ${props.ytIngest.processing_videos} processing` : ""}
+              {props.ytIngest.failed_videos ? ` · ${props.ytIngest.failed_videos} failed` : ""}
+            </div>
+            <div>
+              <span className="text-slate-400">Benchmark</span>{" "}
+              {props.ytIngest.benchmark_ready ? `ready (n=${props.ytIngest.benchmark_sample_size})` : "building"}
+            </div>
+          </div>
+          {props.ytIngest.message ? <div className="mt-2 text-slate-300">{props.ytIngest.message}</div> : null}
+        </div>
+      ) : null}
       {props.uploadedJobs.length ? (
         <div className="mt-4 border border-white/10 rounded-lg overflow-hidden">
+          <div className="flex items-center justify-between px-2 py-2 bg-white/5">
+            <div className="text-xs text-slate-300">Recent uploads</div>
+            {props.onClearHistory ? (
+              <Button variant="premium-ghost" onClick={props.onClearHistory}>
+                Clear history
+              </Button>
+            ) : null}
+          </div>
           <div className="max-h-44 overflow-auto">
             <table className="w-full text-xs">
               <thead className="bg-white/5 text-slate-300">

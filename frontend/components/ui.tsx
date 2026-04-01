@@ -17,6 +17,7 @@ export function Button(props: {
   variant?: "primary" | "ghost" | "premium" | "premium-ghost";
   disabled?: boolean;
   type?: "button" | "submit";
+  title?: string;
 }) {
   const v = props.variant ?? "primary";
   return (
@@ -24,6 +25,7 @@ export function Button(props: {
       type={props.type ?? "button"}
       onClick={props.onClick}
       disabled={props.disabled}
+      title={props.title}
       className={clsx(
         "px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-60 disabled:cursor-not-allowed",
         v === "primary"

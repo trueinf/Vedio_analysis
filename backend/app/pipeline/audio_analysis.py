@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import re
+import os
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +13,37 @@ import soundfile as sf
 from faster_whisper import WhisperModel
 
 from app.settings import settings
+
+
+_WHISPER_MODEL_LOCK = threading.Lock()
+_WHISPER_MODEL_CACHE: dict[tuple[str, str, str], WhisperModel] = {}
+
+
+def _get_whisper_model(model_name: str, device: str, compute_type: str) -> WhisperModel:
+    """
+    Reuse WhisperModel per-process to avoid repeated large allocations.
+    This prevents mkl_malloc OOM when multiple jobs run.
+    """
+    key = (model_name, device, compute_type)
+    with _WHISPER_MODEL_LOCK:
+        m = _WHISPER_MODEL_CACHE.get(key)
+        if m is not None:
+            return m
+        kwargs: dict[str, Any] = dict(
+            device=device,
+            compute_type=compute_type,
+            download_root=settings.models_dir,
+            local_files_only=bool(settings.whisper_local_files_only),
+        )
+        # Keep resource usage conservative (helps Windows + low-RAM machines).
+        try:
+            kwargs["cpu_threads"] = max(1, min(4, (os.cpu_count() or 4)))
+            kwargs["num_workers"] = 1
+        except Exception:
+            pass
+        m = WhisperModel(model_name, **kwargs)
+        _WHISPER_MODEL_CACHE[key] = m
+        return m
 
 
 FILLERS = ["uh", "um", "like", "so", "basically", "you know"]
@@ -141,13 +174,7 @@ def _transcribe_chunked(
     device: str,
     compute_type: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    model = WhisperModel(
-        model_size,
-        device=device,
-        compute_type=compute_type,
-        download_root=settings.models_dir,
-        local_files_only=bool(settings.whisper_local_files_only),
-    )
+    model = _get_whisper_model(model_size, device, compute_type)
     seg_out: list[dict[str, Any]] = []
     words_timed: list[dict[str, Any]] = []
     with sf.SoundFile(wav_path) as f:
@@ -186,13 +213,7 @@ def transcribe_and_measure(
     compute_type: str = "int8",
 ) -> AudioMetrics:
     def _run(model_name: str) -> tuple[Any, Any]:
-        model = WhisperModel(
-            model_name,
-            device=device,
-            compute_type=compute_type,
-            download_root=settings.models_dir,
-            local_files_only=bool(settings.whisper_local_files_only),
-        )
+        model = _get_whisper_model(model_name, device, compute_type)
         return model.transcribe(
             wav_path,
             vad_filter=True,

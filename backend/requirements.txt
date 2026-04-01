@@ -10,6 +10,9 @@ rq==1.16.2
 orjson==3.10.12
 httpx==0.27.2
 
+# Supabase (DB + Storage persistence)
+supabase==2.10.0
+
 # Media / analysis
 numpy==1.26.4
 opencv-python==4.10.0.84
@@ -25,4 +28,6 @@ insightface==0.7.3
 # For GPU: pip uninstall onnxruntime && pip install onnxruntime-gpu==1.19.2 and set VISION_INSIGHTFACE_GPU=true
 onnxruntime==1.19.2
 scenedetect[opencv]==0.6.4
+# YouTube ingest
+yt-dlp==2025.1.26
 

@@ -15,8 +15,18 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, select, text
 
 from app.db import Base, engine, get_db
-from app.models import Channel, Collection, Job, JobStatus
-from app.migrations import ensure_agent_tables, ensure_job_progress_columns
+from app.models import (
+    Channel,
+    Collection,
+    Job,
+    JobStatus,
+    YouTubeChannel,
+    YouTubeIngest,
+    YouTubeIngestStatus,
+    YouTubeVideo,
+    YouTubeVideoStatus,
+)
+from app.migrations import ensure_agent_tables, ensure_job_progress_columns, ensure_youtube_tables
 from app.comparison_engine import benchmark_from_results, build_comparison_report
 from app.schemas import (
     BatchUploadResponse,
@@ -35,11 +45,28 @@ from app.schemas import (
     JobOut,
     JobResultOut,
     UploadResponse,
+    YouTubeIngestCreateIn,
+    YouTubeIngestCreateOut,
+    YouTubeIngestStatusOut,
+    YouTubeJobIn,
+    SupabaseStorageJobIn,
 )
 from app.settings import settings
 from app.utils.files import ensure_dir, safe_filename
-from app.worker_queue import enqueue_job
+from app.worker_queue import enqueue_job, enqueue_task
+from app.supabase_repo import (
+    upsert_analysis_row,
+    upload_file_to_storage,
+    put_result_json,
+    list_analyses,
+    get_analysis,
+    get_result,
+    create_comparison_report,
+    ensure_bucket_exists,
+    create_signed_upload_url,
+)
 from app.video_meta import probe_duration_sec
+from app.youtube_service import normalize_channel_handle
 
 
 def _suggest_channel_name(filenames: list[str]) -> tuple[str, str]:
@@ -253,6 +280,7 @@ def create_app() -> FastAPI:
     Base.metadata.create_all(bind=engine)
     ensure_job_progress_columns(engine)
     ensure_agent_tables(engine)
+    ensure_youtube_tables(engine)
     ensure_dir(settings.uploads_dir)
     ensure_dir(settings.artifacts_dir)
     ensure_dir(settings.results_dir)
@@ -288,6 +316,31 @@ def create_app() -> FastAPI:
     def health() -> HealthOut:
         return HealthOut()
 
+    @app.post("/api/supabase/storage/ensure-bucket")
+    def supabase_ensure_bucket() -> dict:
+        # Uses backend service role key; safe to call from frontend.
+        ensure_bucket_exists(settings.supabase_bucket)
+        return {
+            "ok": True,
+            "bucket": settings.supabase_bucket,
+            "file_size_limit_bytes": settings.supabase_bucket_file_size_limit_bytes,
+        }
+
+    @app.post("/api/supabase/storage/signed-upload-url")
+    def supabase_signed_upload_url(payload: dict) -> dict:
+        """
+        Create a signed upload URL for client-side upload without Storage RLS policies.
+        Payload: { path: string, bucket?: string }
+        """
+        path = str(payload.get("path") or "").strip()
+        bucket = str(payload.get("bucket") or settings.supabase_bucket).strip()
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        out = create_signed_upload_url(bucket=bucket, path=path)
+        if not out.get("signed_url") or not out.get("token"):
+            raise HTTPException(status_code=500, detail="failed to create signed upload url")
+        return {"bucket": bucket, **out}
+
     @app.post("/api/jobs/upload", response_model=UploadResponse)
     async def upload_video(
         file: UploadFile = File(...),
@@ -322,6 +375,29 @@ def create_app() -> FastAPI:
                 f.write(chunk)
 
         duration = probe_duration_sec(str(dest), ffprobe_bin=settings.ffprobe_bin)
+        # Persist to Supabase Storage + DB (best-effort). Always upsert analyses row when Supabase is configured
+        # so dashboard works even if Storage rejects (e.g. plan size cap) — job still runs from local disk.
+        storage_path = f"{job_id}/{original}"
+        storage_ok = False
+        try:
+            upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
+            storage_ok = True
+        except Exception:
+            pass
+        try:
+            upsert_analysis_row(
+                analysis_id=job_id,
+                source_type="upload",
+                source_url="",
+                title=original,
+                video_storage_path=storage_path if storage_ok else "",
+                duration_sec=int(duration or 0),
+                status="queued",
+                stage="queued",
+                progress=0.0,
+            )
+        except Exception:
+            pass
 
         now = datetime.utcnow()
         job = Job(
@@ -347,6 +423,109 @@ def create_app() -> FastAPI:
             suggested_channel_name=suggested,
             suggestion_confidence=conf,
         )
+
+    # Path must not be `/api/jobs/youtube` — that collides with `GET /api/jobs/{job_id}` (job_id="youtube" → 405 on POST).
+    @app.post("/api/jobs/from-youtube", response_model=UploadResponse)
+    def create_job_from_youtube(payload: YouTubeJobIn, db: Session = Depends(get_db)) -> UploadResponse:
+        url = (payload.url or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
+        low = url.lower()
+        if ("youtube.com/@" in low) or low.rstrip("/").endswith("/@") or low.startswith("@") or ("/channel/" in low) or ("/c/" in low):
+            raise HTTPException(
+                status_code=400,
+                detail="This looks like a channel link/handle. Use 'Specific channel → Build real benchmark' instead.",
+            )
+        if ("watch?v=" not in low) and ("youtu.be/" not in low) and ("/shorts/" not in low):
+            raise HTTPException(status_code=400, detail="Please paste a YouTube video URL (watch?v=..., youtu.be/..., or /shorts/...)")
+
+        job_id = str(uuid.uuid4())
+        # Put under uploads/youtube-urls/<job_id>.mp4
+        dest_dir = Path(settings.uploads_dir) / "youtube-urls"
+        ensure_dir(dest_dir)
+        dest = dest_dir / f"{job_id}.mp4"
+
+        now = datetime.utcnow()
+        job = Job(
+            id=job_id,
+            created_at=now,
+            updated_at=now,
+            status=JobStatus.queued,
+            original_filename=f"youtube_url:{url[:220]}",
+            video_path=str(dest),
+            collection_id="",
+            duration_sec=0,
+            stage="queued",
+            progress=0.0,
+            error_message="",
+            result_path="",
+        )
+        db.add(job)
+        db.commit()
+        try:
+            upsert_analysis_row(
+                analysis_id=job_id,
+                source_type="youtube_url",
+                source_url=url,
+                title="YouTube URL",
+                video_storage_path="",
+                duration_sec=0,
+                status="queued",
+                stage="queued",
+                progress=0.0,
+            )
+        except Exception:
+            pass
+
+        # Download async (then enqueue normal pipeline)
+        enqueue_task("app.youtube_url_tasks.download_then_enqueue", job_id, url)
+        return UploadResponse(job_id=job_id, status=job.status.value, message="youtube url queued")
+
+    @app.post("/api/jobs/from-supabase", response_model=UploadResponse)
+    def create_job_from_supabase(payload: SupabaseStorageJobIn, db: Session = Depends(get_db)) -> UploadResponse:
+        storage_path = (payload.storage_path or "").strip()
+        if not storage_path:
+            raise HTTPException(status_code=400, detail="storage_path is required")
+
+        job_id = str(uuid.uuid4())
+        original = safe_filename(payload.original_filename or "upload.mp4")
+        ext = Path(original).suffix or ".mp4"
+        dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
+
+        now = datetime.utcnow()
+        job = Job(
+            id=job_id,
+            created_at=now,
+            updated_at=now,
+            status=JobStatus.queued,
+            original_filename=original,
+            video_path=str(dest),
+            collection_id="",
+            duration_sec=0,
+            stage="queued",
+            progress=0.0,
+            error_message="",
+            result_path="",
+        )
+        db.add(job)
+        db.commit()
+        try:
+            upsert_analysis_row(
+                analysis_id=job_id,
+                source_type="upload",
+                source_url="",
+                title=original,
+                video_storage_path=storage_path,
+                duration_sec=0,
+                status="queued",
+                stage="queued",
+                progress=0.0,
+            )
+        except Exception:
+            pass
+
+        enqueue_task("app.supabase_storage_tasks.download_from_supabase_then_enqueue", job_id, storage_path)
+        return UploadResponse(job_id=job_id, status=job.status.value, message="supabase upload queued")
 
     @app.post("/api/jobs/upload/batch", response_model=BatchUploadResponse)
     async def upload_videos(
@@ -385,6 +564,22 @@ def create_app() -> FastAPI:
                     f.write(chunk)
 
             duration = probe_duration_sec(str(dest), ffprobe_bin=settings.ffprobe_bin)
+            storage_path = f"{job_id}/{original}"
+            try:
+                upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
+                upsert_analysis_row(
+                    analysis_id=job_id,
+                    source_type="upload",
+                    source_url="",
+                    title=original,
+                    video_storage_path=storage_path,
+                    duration_sec=int(duration or 0),
+                    status="queued",
+                    stage="queued",
+                    progress=0.0,
+                )
+            except Exception:
+                pass
             job = Job(
                 id=job_id,
                 created_at=now,
@@ -418,6 +613,199 @@ def create_app() -> FastAPI:
             suggestion_confidence=conf,
             message=f"uploaded {len(out)} file(s)",
         )
+
+    @app.get("/api/analyses")
+    def api_list_analyses(limit: int = 200) -> dict:
+        rows = list_analyses(limit=limit)
+        return {"analyses": rows}
+
+    @app.get("/api/analyses/{analysis_id}")
+    def api_get_analysis(analysis_id: str) -> dict:
+        row = get_analysis(analysis_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="analysis not found (or Supabase not configured)")
+        return {"analysis": row}
+
+    @app.get("/api/analyses/{analysis_id}/result")
+    def api_get_analysis_result(analysis_id: str) -> dict:
+        r = get_result(analysis_id)
+        if not r:
+            raise HTTPException(status_code=404, detail="analysis result not found (or Supabase not configured)")
+        return {"result": r}
+
+    # --- Supabase-backed API (Phase 1) ---
+
+    @app.get("/api/supabase/analyses")
+    def list_supabase_analyses(limit: int = 50, offset: int = 0, status: str = "") -> dict:
+        from app.supabase_client import list_analyses as sb_list
+
+        data = sb_list(limit=limit, offset=offset, status=status)
+        return {"analyses": data, "count": len(data)}
+
+    @app.get("/api/supabase/analyses/{job_id}")
+    def get_supabase_analysis(job_id: str) -> dict:
+        from app.supabase_client import get_analysis_by_job_id
+
+        data = get_analysis_by_job_id(job_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        return data
+
+    @app.get("/api/supabase/analyses/{job_id}/full")
+    def get_supabase_analysis_full(job_id: str) -> dict:
+        from app.supabase_client import get_analysis_by_job_id
+
+        data = get_analysis_by_job_id(job_id)
+        if not data:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        return {"analysis": data, "result": data.get("result_json", {})}
+
+    @app.post("/api/supabase/comparisons")
+    def create_supabase_comparison(payload: ComparisonIn, db: Session = Depends(get_db)) -> dict:
+        # Fetch source result from Supabase
+        from app.supabase_client import get_analysis_by_job_id, store_comparison, get_supabase_client
+
+        source_data = get_analysis_by_job_id(payload.job_id)
+        if not source_data or not source_data.get("result_json"):
+            # fallback to file-based result
+            job = db.get(Job, payload.job_id)
+            if not job or job.status != JobStatus.completed:
+                raise HTTPException(status_code=409, detail="source analysis not completed")
+            import json as _json
+            from pathlib import Path as _Path
+
+            if not job.result_path or not _Path(job.result_path).exists():
+                raise HTTPException(status_code=500, detail="result missing")
+            result = _json.loads(_Path(job.result_path).read_text(encoding="utf-8"))
+        else:
+            result = source_data["result_json"]
+
+        # Target analysis (optional)
+        target_result = None
+        target_job_id = None
+        if payload.compare_mode == "specific_channel" and payload.competitor_channel.strip():
+            client = get_supabase_client()
+            if client:
+                try:
+                    target_res = (
+                        client.table("analyses")
+                        .select("job_id, result_json")
+                        .eq("channel_name", payload.competitor_channel.strip())
+                        .eq("status", "completed")
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                    if target_res.data:
+                        target_job_id = target_res.data[0]["job_id"]
+                        target_result = target_res.data[0]["result_json"]
+                except Exception:
+                    pass
+
+        from app.comparison_engine import build_comparison_report, benchmark_from_results
+
+        bench = benchmark_from_results([target_result]) if target_result else None
+        report = build_comparison_report(
+            result=result,
+            compare_mode=payload.compare_mode,
+            niche=payload.niche,
+            competitor_channel=payload.competitor_channel,
+            goal=payload.goal,
+            platform=payload.platform,
+            benchmark_override=bench,
+            benchmark_label_override=payload.competitor_channel if target_result else None,
+            benchmark_sample_size=1 if target_result else 0,
+        )
+
+        stored = store_comparison(
+            source_job_id=payload.job_id,
+            target_job_id=target_job_id,
+            report=report,
+            niche=payload.niche,
+            goal=payload.goal,
+            platform=payload.platform,
+            compare_mode=payload.compare_mode,
+            competitor_channel=payload.competitor_channel,
+        )
+
+        return {"report": report, "comparison_id": stored["id"] if stored else None}
+
+    @app.get("/api/supabase/stats")
+    def get_supabase_stats() -> dict:
+        from app.supabase_client import get_supabase_client
+
+        client = get_supabase_client()
+        if not client:
+            return {"error": "supabase not configured"}
+        try:
+            total = client.table("analyses").select("id", count="exact").execute()
+            completed = client.table("analyses").select("id", count="exact").eq("status", "completed").execute()
+            avg_res = (
+                client.table("analyses")
+                .select("overall_score, wpm, eye_contact_ratio, fillers_per_min, confidence_score, energy_score")
+                .eq("status", "completed")
+                .order("created_at", desc=True)
+                .limit(500)
+                .execute()
+            )
+            rows = avg_res.data or []
+
+            def safe_avg(key: str) -> float:
+                vals = [r[key] for r in rows if isinstance(r, dict) and r.get(key) is not None]
+                return round(sum(vals) / len(vals), 2) if vals else 0.0
+
+            return {
+                "total_analyses": getattr(total, "count", 0) or 0,
+                "completed_analyses": getattr(completed, "count", 0) or 0,
+                "avg_overall_score": safe_avg("overall_score"),
+                "avg_wpm": safe_avg("wpm"),
+                "avg_eye_contact": safe_avg("eye_contact_ratio"),
+                "avg_fillers_per_min": safe_avg("fillers_per_min"),
+                "avg_confidence_score": safe_avg("confidence_score"),
+                "avg_energy_score": safe_avg("energy_score"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    @app.post("/api/compare/from-analyses")
+    def api_compare_from_analyses(payload: dict) -> dict:
+        """
+        Build comparison report from two stored analyses.
+        Payload: { left_analysis_id: str, right_analysis_id: str }
+        """
+        left_id = str(payload.get("left_analysis_id") or "").strip()
+        right_id = str(payload.get("right_analysis_id") or "").strip()
+        if not left_id or not right_id:
+            raise HTTPException(status_code=400, detail="left_analysis_id and right_analysis_id are required")
+        left = get_result(left_id)
+        right = get_result(right_id)
+        if not left or not right:
+            raise HTTPException(status_code=404, detail="missing stored results for one or both analyses")
+        # Reuse existing comparison_report logic by simulating a minimal benchmark payload.
+        # We keep it deterministic: compare key summary/cards fields between the two results.
+        report = {
+            "left_analysis_id": left_id,
+            "right_analysis_id": right_id,
+            "generated_at": datetime.utcnow().isoformat(),
+            "delta": {
+                "overall_score": float((left.get("summary") or {}).get("overall_score") or 0)
+                - float((right.get("summary") or {}).get("overall_score") or 0),
+                "wpm": float(((left.get("cards") or {}).get("speech_rate") or {}).get("wpm") or 0)
+                - float(((right.get("cards") or {}).get("speech_rate") or {}).get("wpm") or 0),
+                "fillers_per_min": float(((left.get("cards") or {}).get("filler_words") or {}).get("per_minute") or 0)
+                - float(((right.get("cards") or {}).get("filler_words") or {}).get("per_minute") or 0),
+                "eye_contact": float(((left.get("cards") or {}).get("eye_contact") or {}).get("on_camera_ratio") or 0)
+                - float(((right.get("cards") or {}).get("eye_contact") or {}).get("on_camera_ratio") or 0),
+                "gestures_per_min": float(((left.get("cards") or {}).get("gestures") or {}).get("per_minute") or 0)
+                - float(((right.get("cards") or {}).get("gestures") or {}).get("per_minute") or 0),
+                "tonal_score": float((((left.get("cards") or {}).get("tonal_variation") or {}).get("score")) or 0)
+                - float((((right.get("cards") or {}).get("tonal_variation") or {}).get("score")) or 0),
+            },
+            "left": {"summary": left.get("summary"), "cards": left.get("cards")},
+            "right": {"summary": right.get("summary"), "cards": right.get("cards")},
+        }
+        rid = create_comparison_report(left_analysis_id=left_id, right_analysis_id=right_id, report=report)
+        return {"comparison_report_id": rid, "report": report}
 
     @app.get("/api/collections/{collection_id}/summary", response_model=CollectionSummaryOut)
     def get_collection_summary(collection_id: str, db: Session = Depends(get_db)) -> CollectionSummaryOut:
@@ -635,7 +1023,23 @@ def create_app() -> FastAPI:
         bench_label = ""
         bench_rows: list[dict] = []
 
+        yt_benchmark: dict | None = None
+        yt_benchmark_label: str | None = None
+        yt_benchmark_n: int = 0
+
         if payload.compare_mode == "specific_channel" and payload.competitor_channel.strip():
+            # Prefer a real benchmark built from competitor channel videos (YouTube ingest).
+            handle = normalize_channel_handle(payload.competitor_channel.strip())
+            ytch = db.execute(select(YouTubeChannel).where(func.lower(YouTubeChannel.handle) == handle.lower())).scalar_one_or_none()
+            if ytch and (ytch.last_benchmark_json or "").strip() and ytch.last_benchmark_json.strip() != "{}":
+                try:
+                    yt_benchmark = json.loads(ytch.last_benchmark_json)
+                    yt_benchmark_label = ytch.title or ytch.handle
+                    yt_benchmark_n = int(ytch.last_benchmark_sample_size or 0)
+                except Exception:
+                    yt_benchmark = None
+
+        if payload.compare_mode == "specific_channel" and payload.competitor_channel.strip() and not yt_benchmark:
             ch = db.execute(
                 select(Channel).where(func.lower(Channel.name) == payload.competitor_channel.strip().lower())
             ).scalar_one_or_none()
@@ -686,7 +1090,9 @@ def create_app() -> FastAPI:
                 bench_rows = [x[1] for x in scored[:keep]]
                 bench_label = f"Top internal creators ({payload.niche})"
 
-        bench = benchmark_from_results(bench_rows) if bench_rows else None
+        bench = yt_benchmark or (benchmark_from_results(bench_rows) if bench_rows else None)
+        if yt_benchmark_label:
+            bench_label = yt_benchmark_label
         report = build_comparison_report(
             result=result,
             compare_mode=payload.compare_mode,
@@ -695,10 +1101,123 @@ def create_app() -> FastAPI:
             goal=payload.goal,
             platform=payload.platform,
             benchmark_override=bench,
-            benchmark_label_override=bench_label or None,
-            benchmark_sample_size=len(bench_rows),
+            benchmark_label_override=(bench_label or None),
+            benchmark_sample_size=(yt_benchmark_n if yt_benchmark else len(bench_rows)),
         )
         return ComparisonOut(report=report)
+
+    @app.post("/api/youtube/channel/ingest", response_model=YouTubeIngestCreateOut)
+    def youtube_ingest(payload: YouTubeIngestCreateIn, db: Session = Depends(get_db)) -> YouTubeIngestCreateOut:
+        handle = normalize_channel_handle(payload.channel)
+        if not handle:
+            raise HTTPException(status_code=400, detail="channel is required (e.g. @handle)")
+        if not settings.youtube_api_key.strip():
+            raise HTTPException(status_code=400, detail="backend missing YOUTUBE_API_KEY")
+
+        ingest = YouTubeIngest(
+            id=str(uuid.uuid4()),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            channel_handle=handle,
+            requested_video_count=max(1, min(int(payload.video_count or settings.youtube_max_videos), 25)),
+            status=YouTubeIngestStatus.queued,
+            message="Queued",
+        )
+        db.add(ingest)
+        db.commit()
+
+        enqueue_task("app.youtube_tasks.ingest_youtube_channel", ingest.id)
+        return YouTubeIngestCreateOut(
+            ingest_id=ingest.id,
+            status=ingest.status.value,
+            channel_handle=ingest.channel_handle,
+            message=ingest.message,
+        )
+
+    def _finalize_youtube_benchmark_if_ready(db: Session, handle: str, ingest_id: str) -> tuple[bool, int]:
+        vids = list(
+            db.execute(
+                select(YouTubeVideo).where(
+                    YouTubeVideo.ingest_id == ingest_id,
+                    YouTubeVideo.channel_handle == handle,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        completed_job_ids = [v.job_id for v in vids if v.status == YouTubeVideoStatus.completed and v.job_id]
+        results: list[dict] = []
+        for jid in completed_job_ids:
+            j = db.get(Job, jid)
+            if not j or j.status != JobStatus.completed:
+                continue
+            if j.result_path and Path(j.result_path).exists():
+                try:
+                    results.append(json.loads(Path(j.result_path).read_text(encoding="utf-8")))
+                except Exception:
+                    continue
+        bench = benchmark_from_results(results) if results else None
+        if not bench:
+            return (False, 0)
+        ytch = (
+            db.execute(select(YouTubeChannel).where(func.lower(YouTubeChannel.handle) == handle.lower()))
+            .scalar_one_or_none()
+        )
+        if not ytch:
+            return (False, 0)
+        ytch.last_benchmark_json = json.dumps(bench)
+        ytch.last_benchmark_sample_size = len(results)
+        ytch.last_benchmark_updated_at = datetime.utcnow()
+        db.commit()
+        return (True, len(results))
+
+    @app.get("/api/youtube/ingest/{ingest_id}", response_model=YouTubeIngestStatusOut)
+    def youtube_ingest_status(ingest_id: str, db: Session = Depends(get_db)) -> YouTubeIngestStatusOut:
+        ingest = db.get(YouTubeIngest, ingest_id)
+        if not ingest:
+            raise HTTPException(status_code=404, detail="ingest not found")
+        vids = list(db.execute(select(YouTubeVideo).where(YouTubeVideo.ingest_id == ingest.id)).scalars().all())
+        total = len(vids)
+        completed = sum(1 for v in vids if v.status == YouTubeVideoStatus.completed)
+        failed = sum(1 for v in vids if v.status == YouTubeVideoStatus.failed)
+        processing = sum(
+            1 for v in vids if v.status in {YouTubeVideoStatus.analyzing, YouTubeVideoStatus.downloaded, YouTubeVideoStatus.queued}
+        )
+
+        benchmark_ready = False
+        sample_size = 0
+        if ingest.status in {YouTubeIngestStatus.processing, YouTubeIngestStatus.queued} and completed >= 3 and processing == 0:
+            ok, n = _finalize_youtube_benchmark_if_ready(db, ingest.channel_handle, ingest.id)
+            if ok:
+                ingest.status = YouTubeIngestStatus.ready
+                ingest.message = "Benchmark ready"
+                ingest.updated_at = datetime.utcnow()
+                db.commit()
+                benchmark_ready = True
+                sample_size = n
+
+        if not benchmark_ready:
+            ytch = (
+                db.execute(select(YouTubeChannel).where(func.lower(YouTubeChannel.handle) == ingest.channel_handle.lower()))
+                .scalar_one_or_none()
+            )
+            if ytch and (ytch.last_benchmark_json or "").strip() and ytch.last_benchmark_json.strip() != "{}":
+                benchmark_ready = True
+                sample_size = int(ytch.last_benchmark_sample_size or 0)
+
+        return YouTubeIngestStatusOut(
+            ingest_id=ingest.id,
+            status=ingest.status.value,
+            channel_handle=ingest.channel_handle,
+            requested_video_count=int(ingest.requested_video_count or 0),
+            message=ingest.message,
+            total_videos=total,
+            completed_videos=completed,
+            failed_videos=failed,
+            processing_videos=processing,
+            benchmark_ready=benchmark_ready,
+            benchmark_sample_size=sample_size,
+        )
 
     return app
 
