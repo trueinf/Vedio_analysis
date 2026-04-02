@@ -137,8 +137,8 @@ def upsert_analysis_row(
         "error_message": error_message or "",
     }
     try:
-        # on_conflict="id" means: if a row with this id already exists, UPDATE it instead of failing
-        sb.table("analyses").upsert(payload, on_conflict="id").execute()
+        # Conflict on job_id (unique) — avoids duplicate key on analyses_job_id_key vs id-only upsert.
+        sb.table("analyses").upsert(payload, on_conflict="job_id").execute()
         print(f"[Supabase] upsert_analysis_row OK: {analysis_id} -> {status}")
     except Exception as e:
         print(f"[Supabase] upsert_analysis_row FAILED for {analysis_id}: {e}")

@@ -45,7 +45,7 @@ def upsert_analysis(job_id: str, data: dict[str, Any]) -> bool:
     if not client:
         return False
     try:
-        client.table("analyses").upsert({"job_id": job_id, **data}).execute()
+        client.table("analyses").update(data).eq("job_id", job_id).execute()
         return True
     except Exception as e:
         print(f"[Supabase] upsert_analysis failed: {e}")
@@ -57,7 +57,7 @@ def update_analysis_status(job_id: str, status: str, stage: str = "", progress: 
     if not client:
         return False
     try:
-        payload: dict[str, Any] = {"job_id": job_id, "status": status}
+        payload: dict[str, Any] = {"status": status}
         if stage:
             payload["stage"] = stage
         # Important: progress can be 0.0, still meaningful
@@ -67,10 +67,10 @@ def update_analysis_status(job_id: str, status: str, stage: str = "", progress: 
         if error:
             payload["error_message"] = error
         try:
-            client.table("analyses").upsert(payload).execute()
+            client.table("analyses").update(payload).eq("job_id", job_id).execute()
         except Exception:
             payload.pop("progress_int", None)
-            client.table("analyses").upsert(payload).execute()
+            client.table("analyses").update(payload).eq("job_id", job_id).execute()
         return True
     except Exception as e:
         logger.warning("[Supabase] update_analysis_status failed: %s", e)
