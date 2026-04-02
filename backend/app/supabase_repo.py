@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import mimetypes
 import uuid
 from datetime import datetime
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _configured() -> bool:
@@ -180,18 +183,30 @@ def set_analysis_video_storage_path(*, analysis_id: str, video_storage_path: str
         print(f"[Supabase] set_analysis_video_storage_path FAILED for {analysis_id}: {e}")
 
 
-def put_result_json(*, analysis_id: str, result: dict[str, Any], result_version: str = "v1") -> None:
+def put_result_json(
+    *,
+    analysis_id: str,
+    result: dict[str, Any],
+    result_version: str = "v1",
+    finalize_completed: bool = False,
+    channel_name: str = "",
+    duration_sec: int = 0,
+) -> None:
     if not _configured():
         return
     sb = _client()
     try:
         # Store result inline in the analyses row + persist commonly-used summary fields at top level.
         summary = (result.get("summary") or {}) if isinstance(result, dict) else {}
-        cards = (result.get("cards") or {}) if isinstance(result, dict) else {}
+        cards = (result.get("cards") or {}) if isinstance(cards, dict) else {}
         speech = (cards.get("speech_rate") or {}) if isinstance(cards, dict) else {}
         eye = (cards.get("eye_contact") or {}) if isinstance(cards, dict) else {}
+        fw = (cards.get("filler_words") or {}) if isinstance(cards, dict) else {}
+        gs = (cards.get("gestures") or {}) if isinstance(cards, dict) else {}
+        tv = (cards.get("tonal_variation") or {}) if isinstance(cards, dict) else {}
 
         payload: dict[str, Any] = {
+            "updated_at": datetime.utcnow().isoformat(),
             "result_json": result,
             "overall_score": int((summary.get("overall_score") or 0) or 0),
             "wpm": float((speech.get("wpm") or 0.0) or 0.0),
@@ -202,9 +217,36 @@ def put_result_json(*, analysis_id: str, result: dict[str, Any], result_version:
         if str(result.get("original_filename") or "").strip():
             payload["original_filename"] = str(result.get("original_filename") or "").strip()
 
-        sb.table("analyses").update(payload).eq("id", analysis_id).execute()
+        if finalize_completed:
+            payload["status"] = "completed"
+            payload["stage"] = "completed"
+            payload["progress"] = 1.0
+            payload["progress_int"] = 100
+            payload["fillers_per_min"] = float(fw.get("per_minute") or 0.0)
+            payload["gestures_per_min"] = float(gs.get("per_minute") or 0.0)
+            payload["tonal_label"] = str(tv.get("label") or "")
+            payload["duration_sec"] = int(duration_sec or 0)
+            if channel_name:
+                payload["channel_name"] = channel_name
+
+        try:
+            sb.table("analyses").update(payload).eq("job_id", analysis_id).execute()
+        except Exception:
+            p2 = dict(payload)
+            p2.pop("progress_int", None)
+            try:
+                sb.table("analyses").update(p2).eq("job_id", analysis_id).execute()
+            except Exception:
+                sb.table("analyses").update(payload).eq("id", analysis_id).execute()
+
+        logger.info(
+            "Saved result_json for job %s, length: %s",
+            analysis_id,
+            len(str(result)),
+        )
         print(f"[Supabase] put_result_json OK for {analysis_id}")
     except Exception as e:
+        logger.exception("put_result_json failed for %s", analysis_id)
         print(f"[Supabase] put_result_json FAILED for {analysis_id}: {e}")
     # Also try analysis_results table (old schema fallback)
     try:

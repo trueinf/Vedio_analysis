@@ -25,7 +25,6 @@ from app.supabase_repo import (
 from app.supabase_client import (
     get_analysis_by_job_id,
     replace_events_for_analysis_uuid,
-    store_completed_analysis,
     update_analysis_status as sb_update_analysis_status,
     upsert_analysis_results_row,
 )
@@ -165,7 +164,6 @@ def process_job(job_id: str) -> None:
         out_path = Path(settings.results_dir) / f"{job.id}.json"
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
-        # Dual-write completed result to Supabase (new schema) before finalizing SQLite job status.
         channel = ""
         try:
             from app.models import Collection, Channel
@@ -177,19 +175,6 @@ def process_job(job_id: str) -> None:
                     channel = ch.name
         except Exception:
             pass
-        store_completed_analysis(
-            job_id=job.id,
-            result=result,
-            original_filename=job.original_filename,
-            duration_sec=job.duration_sec,
-            channel_name=channel,
-        )
-        sb_row = get_analysis_by_job_id(job.id)
-        if sb_row and sb_row.get("id"):
-            aid = str(sb_row["id"])
-            upsert_analysis_results_row(aid, result)
-            replace_events_for_analysis_uuid(aid, list(result.get("events") or []))
-
         # Persist normalized data model (Video/Metrics/Feedback)
         now = datetime.utcnow()
         vid = db.get(Video, job.id)
@@ -216,9 +201,19 @@ def process_job(job_id: str) -> None:
         job.result_path = str(out_path)
         job.updated_at = datetime.utcnow()
         db.commit()
-        put_result_json(analysis_id=job.id, result=result)
-        update_analysis_status(analysis_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
-        sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
+        # Single Supabase write: result_json + completed status (avoid split updates / silent failures).
+        put_result_json(
+            analysis_id=job.id,
+            result=result,
+            finalize_completed=True,
+            channel_name=channel,
+            duration_sec=int(job.duration_sec or 0),
+        )
+        sb_row = get_analysis_by_job_id(job.id)
+        if sb_row and sb_row.get("id"):
+            aid = str(sb_row["id"])
+            upsert_analysis_results_row(aid, result)
+            replace_events_for_analysis_uuid(aid, list(result.get("events") or []))
 
         # If this job belongs to a YouTube ingest, reflect status.
         ytv = db.execute(select(YouTubeVideo).where(YouTubeVideo.job_id == job.id)).scalar_one_or_none()

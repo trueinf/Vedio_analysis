@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { Button, Card, premiumSurfaceClass } from "@/components/ui";
+import DarkSelect from "@/components/DarkSelect";
 import { VideoDropzone } from "@/components/VideoDropzone";
 import type { AnalysisDetail, AnalysisRow, JobStatus } from "@/lib/api";
 import { compareAnalyses, getAnalysisDetail, getJob, listAnalyses, uploadVideoFast } from "@/lib/api";
@@ -34,6 +35,17 @@ function fmtDelta(delta: number | null, f: CompareMetric["format"]): string {
   if (f === "pct0") return `${sign}${Math.round(delta)}%`;
   if (f === "float1") return `${sign}${delta.toFixed(1)}`;
   return `${sign}${Math.round(delta)}`;
+}
+
+async function fetchDetailWithRetry(jobId: string): Promise<AnalysisDetail> {
+  await new Promise((r) => setTimeout(r, 2000));
+  let detail = await getAnalysisDetail(jobId);
+  const rj = detail?.result_json ?? (detail?.analysis as Record<string, unknown> | null)?.result_json;
+  if (rj == null) {
+    await new Promise((r) => setTimeout(r, 3000));
+    detail = await getAnalysisDetail(jobId);
+  }
+  return detail;
 }
 
 function coachTextFromReport(report: any): string {
@@ -119,6 +131,14 @@ export default function ComparePage() {
     return () => clearInterval(i);
   }, [newJobId, newStatus]);
 
+  useEffect(() => {
+    if (newStatus !== "completed" || !newJobId) return;
+    const rj = newDetail?.result_json ?? (newDetail?.analysis as Record<string, unknown> | null)?.result_json;
+    if (rj != null) return;
+    const id = setTimeout(() => window.location.reload(), 5000);
+    return () => clearTimeout(id);
+  }, [newStatus, newJobId, newDetail]);
+
   const completed = useMemo(() => (analyses || []).filter((a) => a.status === "completed"), [analyses]);
 
   useEffect(() => {
@@ -165,10 +185,9 @@ export default function ComparePage() {
     };
   }, [sourceId]);
 
-  // Poll new job status while analyzing (faster ticks early; fallback to Supabase detail if job API blips).
+  // Poll new job until completed/failed; on completed, wait and retry detail fetch so result_json is present.
   useEffect(() => {
     if (!newJobId) return;
-    if (newStatus === "completed" || newStatus === "failed") return;
     let alive = true;
     let t: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
@@ -178,11 +197,15 @@ export default function ComparePage() {
         setNewStatus(j.status);
         setNewStage((j as any).stage || "");
         setNewProgress(Number((j as any).progress ?? 0));
-        if (j.status === "failed") setNewError(j.error_message || "Analysis failed");
+        if (j.status === "failed") {
+          setNewError(j.error_message || "Analysis failed");
+          return;
+        }
         if (j.status === "completed") {
-          const d = await getAnalysisDetail(newJobId);
+          const d = await fetchDetailWithRetry(newJobId);
           if (!alive) return;
           setNewDetail(d);
+          return;
         }
       } catch {
         try {
@@ -193,7 +216,13 @@ export default function ComparePage() {
             setNewStatus(st as JobStatus);
             setNewStage(String((d.job as any)?.stage ?? ""));
             setNewProgress(Number((d.job as any)?.progress ?? 0));
-            if (st === "completed") setNewDetail(d);
+            if (st === "completed") {
+              const d2 = await fetchDetailWithRetry(newJobId);
+              if (!alive) return;
+              setNewDetail(d2);
+              return;
+            }
+            if (st === "failed") setNewError(String((d.job as any)?.error_message || "Analysis failed"));
           }
         } catch {
           // ignore
@@ -209,7 +238,7 @@ export default function ComparePage() {
       alive = false;
       if (t) clearTimeout(t);
     };
-  }, [newJobId, newStatus]);
+  }, [newJobId]);
 
   const sourceResult = sourceDetail?.result_json as any;
   const newResult = newDetail?.result_json as any;
@@ -253,6 +282,38 @@ export default function ComparePage() {
       .slice(0, 6) as { metric: CompareMetric; delta: number }[];
   }, [metrics]);
 
+  const sourceOptions = useMemo(() => {
+    return completed.map((a) => {
+      const top = Number((a as any).overall_score ?? 0) || 0;
+      const fb = Number((a as any)?.result_json?.summary?.overall_score ?? 0) || 0;
+      const s = top > 0 ? top : fb;
+      const scorePart = s > 0 ? ` · score ${s}` : "";
+      const base = String(a.title || a.original_filename || a.job_id || a.id || "").slice(0, 60);
+      return {
+        value: String(a.job_id || a.id),
+        label: `${base} · ${new Date(a.created_at).toLocaleDateString()}${scorePart}`,
+      };
+    });
+  }, [completed]);
+
+  const goalOptions = useMemo(
+    () =>
+      (["retention", "clarity", "conversion", "confidence"] as const).map((v) => ({
+        value: v,
+        label: v,
+      })),
+    []
+  );
+
+  const platformOptions = useMemo(
+    () =>
+      (["youtube_long", "youtube_shorts"] as const).map((v) => ({
+        value: v,
+        label: v,
+      })),
+    []
+  );
+
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
       <div>
@@ -273,25 +334,14 @@ export default function ComparePage() {
           </div>
 
           <div className="mt-4">
-            <select
+            <DarkSelect
               value={sourceId}
-              onChange={(e) => setSourceId(e.target.value)}
-              className="w-full text-sm border border-white/15 bg-white/5 rounded-xl px-3 py-2.5 text-white"
+              onChange={setSourceId}
+              options={sourceOptions}
               disabled={loadingList || busyUpload || busyCompare}
-            >
-              {completed.map((a) => (
-                <option key={String(a.job_id || a.id)} value={String(a.job_id || a.id)}>
-                  {String(a.title || a.original_filename || a.job_id || a.id || "").slice(0, 60)} ·{" "}
-                  {new Date(a.created_at).toLocaleDateString()}
-                  {(() => {
-                    const top = Number((a as any).overall_score ?? 0) || 0;
-                    const fb = Number((a as any)?.result_json?.summary?.overall_score ?? 0) || 0;
-                    const s = top > 0 ? top : fb;
-                    return s > 0 ? ` · score ${s}` : "";
-                  })()}
-                </option>
-              ))}
-            </select>
+              emptyLabel="No completed analyses yet"
+              placeholder="Choose a video…"
+            />
           </div>
 
           <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
@@ -412,27 +462,21 @@ export default function ComparePage() {
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
           <div className="text-xs text-slate-400">Goal</div>
-          <select
+          <DarkSelect
+            className="mt-2"
             value={goal}
-            onChange={(e) => setGoal(e.target.value as any)}
-            className="mt-2 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white"
-          >
-            <option value="retention">retention</option>
-            <option value="clarity">clarity</option>
-            <option value="conversion">conversion</option>
-            <option value="confidence">confidence</option>
-          </select>
+            onChange={(v) => setGoal(v as "retention" | "clarity" | "conversion" | "confidence")}
+            options={goalOptions}
+          />
         </div>
         <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
           <div className="text-xs text-slate-400">Platform</div>
-          <select
+          <DarkSelect
+            className="mt-2"
             value={platform}
-            onChange={(e) => setPlatform(e.target.value as any)}
-            className="mt-2 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white"
-          >
-            <option value="youtube_long">youtube_long</option>
-            <option value="youtube_shorts">youtube_shorts</option>
-          </select>
+            onChange={(v) => setPlatform(v as "youtube_long" | "youtube_shorts")}
+            options={platformOptions}
+          />
         </div>
         <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-end">
           <Button
@@ -545,6 +589,12 @@ export default function ComparePage() {
               {compareReport ? coachTextFromReport(compareReport) : "Click “Generate AI Coach Summary” to produce recommendations."}
             </div>
           </Card>
+        </div>
+      ) : sourceId && newJobId && !(sourceResult && newResult) ? (
+        <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 px-6 py-8 text-center text-slate-400 text-sm">
+          {newStatus === "completed"
+            ? "Results are processing, refreshing in a moment..."
+            : "Waiting for analysis to complete..."}
         </div>
       ) : null}
     </div>

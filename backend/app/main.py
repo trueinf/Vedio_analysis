@@ -731,6 +731,8 @@ def create_app() -> FastAPI:
         if row and row.get("id"):
             events = list_events_for_analysis_uuid(str(row["id"]))
         result_json = get_result_json_for_job(analysis_id)
+        if result_json is None and row and row.get("result_json") is not None:
+            result_json = row["result_json"]
         if result_json is None and job and job.result_path and Path(job.result_path).exists():
             try:
                 result_json = json.loads(Path(job.result_path).read_text(encoding="utf-8"))
