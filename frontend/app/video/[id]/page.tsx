@@ -81,6 +81,8 @@ function deriveKeyInsights(result: any, durationSec: number): { insights: string
 
       let note = "";
       if (metric.includes("engagement_drop")) note = `Low engagement at ${formatTime(t0)}`;
+      else if (metric.includes("worst_moment")) note = `Low engagement moment at ${formatTime(t0)}`;
+      else if (metric.includes("best_moment")) note = `High engagement moment at ${formatTime(t0)}`;
       else if (metric.includes("eye_contact") && lbl.includes("low")) note = `Low eye contact at ${formatTime(t0)}`;
       else if (metric.includes("filler_words") && lbl.includes("high")) note = `High filler usage early (${formatTime(t0)})`;
       else if (metric.includes("tonal_variation") && (lbl.includes("monotone") || lbl.includes("flat"))) note = `Monotone delivery near ${formatTime(t0)}`;
@@ -347,9 +349,26 @@ export default function VideoDetailPage() {
 
   const coachComments = useMemo(() => {
     const cc = (result?.coach_comments ?? []) as any[];
-    if (cc?.length) return cc.map((x) => ({ t0: Number(x.t0 ?? 0), comment: String(x.comment ?? x.text ?? "") })).filter((x) => x.comment);
-    const priorities = (result?.priorities ?? []) as any[];
-    return priorities.slice(0, 6).map((p) => ({ t0: Number(p.t0 ?? 0), comment: String(p.why_now ?? p.why ?? p.title ?? "") })).filter((x) => x.comment);
+    const rows = cc?.length
+      ? cc.map((x) => ({ t0: Number(x.t0 ?? 0), comment: String(x.comment ?? x.text ?? "") })).filter((x) => x.comment)
+      : (() => {
+          const priorities = (result?.priorities ?? []) as any[];
+          return priorities
+            .slice(0, 6)
+            .map((p) => ({ t0: Number(p.t0 ?? 0), comment: String(p.why_now ?? p.why ?? p.title ?? "") }))
+            .filter((x) => x.comment);
+        })();
+
+    const seen = new Set<string>();
+    const out: { t0: number; comment: string }[] = [];
+    for (const r of rows) {
+      const key = r.comment.trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(r);
+    }
+    return out;
   }, [result]);
 
   return (

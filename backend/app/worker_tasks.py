@@ -136,7 +136,11 @@ def process_job(job_id: str) -> None:
         sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
 
         orch = Orchestrator()
-        result = {"job_id": job.id, **orch.run(db, job, normalized_video=normalized, wav_path=wav_path)}
+        result = {
+            "job_id": job.id,
+            "original_filename": job.original_filename,
+            **orch.run(db, job, normalized_video=normalized, wav_path=wav_path),
+        }
 
         out_path = Path(settings.results_dir) / f"{job.id}.json"
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")

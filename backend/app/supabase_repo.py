@@ -166,8 +166,24 @@ def put_result_json(*, analysis_id: str, result: dict[str, Any], result_version:
         return
     sb = _client()
     try:
-        # Store result inline in the analyses row
-        sb.table("analyses").update({"result_json": result}).eq("id", analysis_id).execute()
+        # Store result inline in the analyses row + persist commonly-used summary fields at top level.
+        summary = (result.get("summary") or {}) if isinstance(result, dict) else {}
+        cards = (result.get("cards") or {}) if isinstance(result, dict) else {}
+        speech = (cards.get("speech_rate") or {}) if isinstance(cards, dict) else {}
+        eye = (cards.get("eye_contact") or {}) if isinstance(cards, dict) else {}
+
+        payload: dict[str, Any] = {
+            "result_json": result,
+            "overall_score": int((summary.get("overall_score") or 0) or 0),
+            "wpm": float((speech.get("wpm") or 0.0) or 0.0),
+            "eye_contact_ratio": float((eye.get("on_camera_ratio") or 0.0) or 0.0),
+            "confidence_score": int((result.get("confidence_score") or 0) or 0),
+            "energy_score": int((result.get("energy_score") or 0) or 0),
+        }
+        if str(result.get("original_filename") or "").strip():
+            payload["original_filename"] = str(result.get("original_filename") or "").strip()
+
+        sb.table("analyses").update(payload).eq("id", analysis_id).execute()
         print(f"[Supabase] put_result_json OK for {analysis_id}")
     except Exception as e:
         print(f"[Supabase] put_result_json FAILED for {analysis_id}: {e}")

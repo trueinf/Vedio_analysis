@@ -261,7 +261,13 @@ export default function ComparePage() {
               {completed.map((a) => (
                 <option key={String(a.job_id || a.id)} value={String(a.job_id || a.id)}>
                   {String(a.title || a.original_filename || a.job_id || a.id || "").slice(0, 60)} ·{" "}
-                  {new Date(a.created_at).toLocaleDateString()} · score {Number((a as any).overall_score ?? 0) || 0}
+                  {new Date(a.created_at).toLocaleDateString()}
+                  {(() => {
+                    const top = Number((a as any).overall_score ?? 0) || 0;
+                    const fb = Number((a as any)?.result_json?.summary?.overall_score ?? 0) || 0;
+                    const s = top > 0 ? top : fb;
+                    return s > 0 ? ` · score ${s}` : "";
+                  })()}
                 </option>
               ))}
             </select>

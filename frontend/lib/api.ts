@@ -50,6 +50,7 @@ export type AnalysisRow = {
   source_url: string;
   title: string;
   original_filename?: string;
+  channel_name?: string;
   video_storage_path: string;
   duration_sec: number;
   status: JobStatus;
@@ -59,6 +60,9 @@ export type AnalysisRow = {
   overall_score?: number;
   confidence_score?: number;
   energy_score?: number;
+  wpm?: number;
+  eye_contact_ratio?: number;
+  result_json?: Record<string, unknown> | null;
 };
 
 export async function listAnalyses(limit = 200): Promise<{ analyses: AnalysisRow[] }> {
