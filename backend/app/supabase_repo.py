@@ -161,6 +161,25 @@ def update_analysis_status(
         print(f"[Supabase] update_analysis_status FAILED for {analysis_id}: {e}")
 
 
+def set_analysis_video_storage_path(*, analysis_id: str, video_storage_path: str) -> None:
+    """
+    Point analyses.video_storage_path at a Storage object (e.g. H.264 playback.mp4 after worker normalize).
+    """
+    if not _configured():
+        return
+    sb = _client()
+    try:
+        sb.table("analyses").update(
+            {
+                "updated_at": datetime.utcnow().isoformat(),
+                "video_storage_path": (video_storage_path or "").strip(),
+            }
+        ).eq("id", analysis_id).execute()
+        print(f"[Supabase] set_analysis_video_storage_path OK: {analysis_id} -> {video_storage_path}")
+    except Exception as e:
+        print(f"[Supabase] set_analysis_video_storage_path FAILED for {analysis_id}: {e}")
+
+
 def put_result_json(*, analysis_id: str, result: dict[str, Any], result_version: str = "v1") -> None:
     if not _configured():
         return

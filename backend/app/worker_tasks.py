@@ -16,7 +16,12 @@ from app.utils.files import ensure_dir
 from app.pipeline.media import extract_audio_wav, normalize_video
 from app.orchestrator import Orchestrator
 from app.models import Feedback, Metrics, Video, YouTubeVideo, YouTubeVideoStatus
-from app.supabase_repo import update_analysis_status, put_result_json
+from app.supabase_repo import (
+    put_result_json,
+    set_analysis_video_storage_path,
+    update_analysis_status,
+    upload_file_to_storage,
+)
 from app.supabase_client import (
     get_analysis_by_job_id,
     replace_events_for_analysis_uuid,
@@ -120,6 +125,21 @@ def process_job(job_id: str) -> None:
         db.commit()
 
         normalize_video(local_video, normalized, ffmpeg_bin=settings.ffmpeg_bin)
+
+        # Browser playback: signed URLs pointed at the raw upload often use HEVC/odd pix_fmts
+        # that decode as audio-only (black video) in Chrome. Mirror pipeline H.264 to Storage
+        # and switch analyses.video_storage_path so the detail page plays reliably.
+        try:
+            playback_sp = f"{job.id}/playback.mp4"
+            upload_file_to_storage(
+                local_path=normalized,
+                storage_path=playback_sp,
+                content_type="video/mp4",
+            )
+            set_analysis_video_storage_path(analysis_id=job.id, video_storage_path=playback_sp)
+        except Exception as e:
+            logger.warning("Could not upload H.264 playback copy to Storage (browser may show black video): %s", e)
+
         job.stage = "preprocessing"
         job.progress = 0.25
         job.updated_at = datetime.utcnow()

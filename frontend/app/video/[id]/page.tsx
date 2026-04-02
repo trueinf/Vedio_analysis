@@ -140,6 +140,7 @@ export default function VideoDetailPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [videoSrcErr, setVideoSrcErr] = useState<string>("");
+  const [decodeErr, setDecodeErr] = useState<string>("");
   const pendingSeekRef = useRef<number | null>(null);
   const [videoReady, setVideoReady] = useState(false);
 
@@ -163,6 +164,7 @@ export default function VideoDetailPage() {
       setDetail(null);
       setVideoSrc("");
       setVideoSrcErr("");
+      setDecodeErr("");
       try {
         const d = await getAnalysisDetail(analysisId);
         if (!alive) return;
@@ -401,19 +403,21 @@ export default function VideoDetailPage() {
       ) : (
         <div className="mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-8 space-y-6">
-            <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
+            {/* Avoid backdrop-blur on the player card: it can break GPU compositing and show a black picture while audio plays. */}
+            <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div className="text-sm font-semibold">Player</div>
                 <div className="text-xs text-slate-400">Seek by clicking insights or timeline</div>
               </div>
-              <div className="relative rounded-xl overflow-hidden border border-white/10 bg-black/20">
+              <div className="relative z-10 isolate rounded-xl overflow-hidden border border-white/10 bg-black">
                 {videoSrc ? (
                   <video
                     ref={videoRef}
                     src={videoSrc}
                     controls
                     playsInline
-                    className="w-full aspect-video object-contain bg-black"
+                    preload="metadata"
+                    className="block w-full max-h-[min(72vh,900px)] min-h-[200px] bg-black object-contain [transform:translateZ(0)]"
                     onTimeUpdate={(e) => setCurrentTime(Number((e.currentTarget as HTMLVideoElement).currentTime || 0))}
                     onLoadedMetadata={() => {
                       setVideoReady(true);
@@ -445,6 +449,17 @@ export default function VideoDetailPage() {
                         // ignore
                       }
                     }}
+                    onError={() => {
+                      const v = videoRef.current;
+                      const code = v?.error?.code;
+                      const map: Record<number, string> = {
+                        1: "Playback aborted",
+                        2: "Network error",
+                        3: "Decode failed (codec may be unsupported in this browser)",
+                        4: "Source not supported",
+                      };
+                      setDecodeErr(code != null ? map[code] ?? "Playback error" : "Playback error");
+                    }}
                   />
                 ) : (
                   <div className="h-[360px] flex items-center justify-center text-slate-300 text-sm">
@@ -453,6 +468,7 @@ export default function VideoDetailPage() {
                 )}
               </div>
               {videoSrcErr ? <div className="mt-2 text-xs text-slate-300">{videoSrcErr}</div> : null}
+              {decodeErr ? <div className="mt-2 text-xs text-amber-200">{decodeErr}</div> : null}
             </Card>
 
             <InsightsPanel
