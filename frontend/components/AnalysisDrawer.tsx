@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type { MetricEvent, MetricKey } from "./video-analysis-types";
 import { Button } from "./ui";
+import { getApiBaseUrl } from "@/lib/api";
 
 // Dynamically import heavy UI blocks.
 const MetricsGrid = dynamic(() => import("./MetricsGrid").then((m) => m.MetricsGrid));
@@ -49,7 +50,7 @@ export function AnalysisDrawer(props: {
     setClipPreviewUrl("");
     (async () => {
       try {
-        const base = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+        const base = getApiBaseUrl();
         const id = props.jobId;
         if (!id) return;
         const res = await fetch(`${base}/api/supabase/analyses/${encodeURIComponent(id)}/full`, { cache: "no-store" });
@@ -123,7 +124,7 @@ export function AnalysisDrawer(props: {
 
   if (!props.open) return null;
 
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+  const apiBase = getApiBaseUrl();
   const onSeek = (t0: number, _t1?: number) => {
     setCurrentTime(Number(t0 || 0));
     // This drawer has no primary video element to control; jump to the dedicated video page.

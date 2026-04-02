@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { StatsBar } from "../../components/StatsBar";
 import type { AnalysisSummary } from "@/lib/supabase";
 import DashboardCard from "@/components/DashboardCard";
+import { getApiBaseUrl } from "@/lib/api";
 
 type StatusFilter = "all" | "queued" | "processing" | "completed" | "failed";
 
@@ -20,7 +21,7 @@ export default function DashboardPage() {
       setLoading(true);
       setErr("");
       try {
-        const base = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+        const base = getApiBaseUrl();
         const listRes = await fetch(`${base}/api/analyses?limit=500`, { cache: "no-store" });
         if (!listRes.ok) throw new Error(`Failed to load analyses (${listRes.status})`);
         const listJson = (await listRes.json()) as { analyses: AnalysisSummary[] };

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "../../components/ui";
 import { VideoUploadPanel } from "../../components/VideoUploadPanel";
 import { createJobFromYouTubeUrl, getJob, uploadVideo } from "../../lib/api";
+import { getApiBaseUrl } from "../../lib/api";
 import { supabase } from "../../lib/supabaseClient";
 
 type UploadJobRow = {
@@ -196,7 +197,7 @@ export default function ProcessPage() {
           return;
         }
         if (needsSigned) {
-          await fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"}/api/supabase/storage/ensure-bucket`, {
+          await fetch(`${getApiBaseUrl()}/api/supabase/storage/ensure-bucket`, {
             method: "POST",
           });
         }
@@ -219,7 +220,7 @@ export default function ProcessPage() {
 
           const storagePath = `${crypto.randomUUID()}/${safeObjectName(f.name)}`;
           const signedRes = await fetch(
-            `${process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"}/api/supabase/storage/signed-upload-url`,
+            `${getApiBaseUrl()}/api/supabase/storage/signed-upload-url`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -233,7 +234,7 @@ export default function ProcessPage() {
           const { error: upErr } = await sb.storage.from(bucket).uploadToSignedUrl(storagePath, signed.token, f);
           if (upErr) throw new Error(`Supabase upload failed: ${upErr.message}`);
 
-          const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"}/api/jobs/from-supabase`, {
+          const res = await fetch(`${getApiBaseUrl()}/api/jobs/from-supabase`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ storage_path: storagePath, original_filename: f.name, channel_name: channelName }),

@@ -1,6 +1,7 @@
 /** Base URL for the FastAPI backend only (no path suffix). */
 function getApiBase(): string {
-  let b = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000").trim();
+  // Prefer NEXT_PUBLIC_API_URL (Netlify/Railway), fall back to older NEXT_PUBLIC_API_BASE.
+  let b = (process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000").trim();
   b = b.replace(/\/+$/, "");
   // Common misconfig: user sets .../api/jobs — strip so we don't double paths.
   b = b.replace(/\/api\/jobs\/?$/i, "");
@@ -9,6 +10,11 @@ function getApiBase(): string {
 }
 
 const API_BASE = getApiBase();
+
+/** Exported for pages that still need a base URL for a one-off fetch. */
+export function getApiBaseUrl(): string {
+  return API_BASE;
+}
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed";
 
