@@ -124,7 +124,8 @@ export default function ComparePage() {
         if (!alive) return;
         const rows = data.analyses || [];
         setAnalyses(rows);
-        const first = (rows || []).find((r: any) => r.status === "completed")?.job_id || "";
+        const firstRow = (rows || []).find((r: any) => r.status === "completed") as any;
+        const first = String(firstRow?.job_id || firstRow?.id || "").trim();
         if (first) setSourceId(first);
       } catch (e: any) {
         if (!alive) return;
@@ -258,8 +259,9 @@ export default function ComparePage() {
               disabled={loadingList || busyUpload || busyCompare}
             >
               {completed.map((a) => (
-                <option key={a.job_id} value={a.job_id}>
-                  {(a.title || a.original_filename || a.job_id).slice(0, 60)} · {new Date(a.created_at).toLocaleDateString()} · score {Number((a as any).overall_score ?? 0) || 0}
+                <option key={String(a.job_id || a.id)} value={String(a.job_id || a.id)}>
+                  {String(a.title || a.original_filename || a.job_id || a.id || "").slice(0, 60)} ·{" "}
+                  {new Date(a.created_at).toLocaleDateString()} · score {Number((a as any).overall_score ?? 0) || 0}
                 </option>
               ))}
             </select>

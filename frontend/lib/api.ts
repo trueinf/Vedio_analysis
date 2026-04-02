@@ -36,17 +36,23 @@ export type JobHistoryItem = {
 
 export type AnalysisRow = {
   id: string;
+  /** Backend often returns both id (uuid) and job_id (text). */
+  job_id?: string;
   created_at: string;
   updated_at: string;
   source_type: string;
   source_url: string;
   title: string;
+  original_filename?: string;
   video_storage_path: string;
   duration_sec: number;
   status: JobStatus;
   stage: string;
   progress: number;
   error_message: string;
+  overall_score?: number;
+  confidence_score?: number;
+  energy_score?: number;
 };
 
 export async function listAnalyses(limit = 200): Promise<{ analyses: AnalysisRow[] }> {

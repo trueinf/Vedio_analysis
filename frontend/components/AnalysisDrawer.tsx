@@ -147,7 +147,7 @@ export function AnalysisDrawer(props: {
               <Button
                 variant="premium-ghost"
                 onClick={() => {
-                  window.location.href = `/video/${encodeURIComponent(props.jobId)}`;
+                  window.location.href = `/video/${encodeURIComponent(String(props.jobId))}`;
                 }}
               >
                 Open Video

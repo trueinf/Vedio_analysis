@@ -17,7 +17,7 @@ function eventMetricKey(e: MetricEvent) {
 }
 
 function eventLabel(e: MetricEvent) {
-  return String(e.label || e.message || e.note || e.reason || "");
+  return String(e.label || e.message || e.note || (e as any).reason || "");
 }
 
 function eventQuality(e: MetricEvent): "good" | "bad" | "neutral" {
