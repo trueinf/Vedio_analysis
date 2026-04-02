@@ -197,13 +197,28 @@ def put_result_json(
     sb = _client()
     try:
         # Store result inline in the analyses row + persist commonly-used summary fields at top level.
-        summary = (result.get("summary") or {}) if isinstance(result, dict) else {}
-        cards = (result.get("cards") or {}) if isinstance(cards, dict) else {}
-        speech = (cards.get("speech_rate") or {}) if isinstance(cards, dict) else {}
-        eye = (cards.get("eye_contact") or {}) if isinstance(cards, dict) else {}
-        fw = (cards.get("filler_words") or {}) if isinstance(cards, dict) else {}
-        gs = (cards.get("gestures") or {}) if isinstance(cards, dict) else {}
-        tv = (cards.get("tonal_variation") or {}) if isinstance(cards, dict) else {}
+        res = result if isinstance(result, dict) else {}
+        summary = res.get("summary") or {}
+        if not isinstance(summary, dict):
+            summary = {}
+        cards = res.get("cards") or {}
+        if not isinstance(cards, dict):
+            cards = {}
+        speech = cards.get("speech_rate") or {}
+        if not isinstance(speech, dict):
+            speech = {}
+        eye = cards.get("eye_contact") or {}
+        if not isinstance(eye, dict):
+            eye = {}
+        fw = cards.get("filler_words") or {}
+        if not isinstance(fw, dict):
+            fw = {}
+        gs = cards.get("gestures") or {}
+        if not isinstance(gs, dict):
+            gs = {}
+        tv = cards.get("tonal_variation") or {}
+        if not isinstance(tv, dict):
+            tv = {}
 
         payload: dict[str, Any] = {
             "updated_at": datetime.utcnow().isoformat(),
@@ -211,11 +226,11 @@ def put_result_json(
             "overall_score": int((summary.get("overall_score") or 0) or 0),
             "wpm": float((speech.get("wpm") or 0.0) or 0.0),
             "eye_contact_ratio": float((eye.get("on_camera_ratio") or 0.0) or 0.0),
-            "confidence_score": int((result.get("confidence_score") or 0) or 0),
-            "energy_score": int((result.get("energy_score") or 0) or 0),
+            "confidence_score": int((res.get("confidence_score") or 0) or 0),
+            "energy_score": int((res.get("energy_score") or 0) or 0),
         }
-        if str(result.get("original_filename") or "").strip():
-            payload["original_filename"] = str(result.get("original_filename") or "").strip()
+        if str(res.get("original_filename") or "").strip():
+            payload["original_filename"] = str(res.get("original_filename") or "").strip()
 
         if finalize_completed:
             payload["status"] = "completed"

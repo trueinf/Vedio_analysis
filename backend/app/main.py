@@ -1131,7 +1131,7 @@ def create_app() -> FastAPI:
         return JobHistoryOut(jobs=out)
 
     @app.get("/api/jobs/{job_id}/result", response_model=JobResultOut)
-    def get_result(job_id: str, db: Session = Depends(get_db)) -> JobResultOut:
+    def get_job_result_file(job_id: str, db: Session = Depends(get_db)) -> JobResultOut:
         job = db.get(Job, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="job not found")
