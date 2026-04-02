@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import ORJSONResponse
@@ -50,6 +50,8 @@ from app.schemas import (
     YouTubeIngestStatusOut,
     YouTubeJobIn,
     SupabaseStorageJobIn,
+    FastUploadResponse,
+    UploadRegisterIn,
 )
 from app.settings import settings
 from app.utils.files import ensure_dir, safe_filename
@@ -65,7 +67,7 @@ from app.supabase_repo import (
     ensure_bucket_exists,
     create_signed_upload_url,
 )
-from app.video_meta import probe_duration_sec
+from app.services.file_service import build_local_upload_path
 from app.youtube_service import normalize_channel_handle
 
 
@@ -274,6 +276,89 @@ def _collection_summary(jobs: list[Job]) -> dict:
     }
 
 
+async def _upload_multipart_core(
+    file: UploadFile,
+    channel_name: str,
+    db: Session,
+) -> UploadResponse:
+    """
+    Stream upload to disk, mirror to Supabase Storage, enqueue worker.
+    Duration is probed in the worker (keeps HTTP fast for large files).
+    """
+    if not file:
+        raise HTTPException(status_code=400, detail="file is required")
+    job_id = str(uuid.uuid4())
+    original = safe_filename(file.filename or "upload.mp4")
+    suggested, conf = _suggest_channel_name([original])
+    final_channel = channel_name.strip() or suggested
+    channel = _get_or_create_channel(db, final_channel)
+    collection_id = str(uuid.uuid4())
+    collection = Collection(
+        id=collection_id,
+        created_at=datetime.utcnow(),
+        channel_id=channel.id,
+        title=f"{channel.name} single upload",
+    )
+    db.add(collection)
+    db.commit()
+    dest = build_local_upload_path(job_id, original)
+
+    with dest.open("wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024 * 8)
+            if not chunk:
+                break
+            f.write(chunk)
+
+    duration = 0
+    storage_path = f"{job_id}/{original}"
+    storage_ok = False
+    try:
+        upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
+        storage_ok = True
+    except Exception:
+        pass
+    try:
+        upsert_analysis_row(
+            analysis_id=job_id,
+            source_type="upload",
+            source_url="",
+            title=original,
+            video_storage_path=storage_path if storage_ok else "",
+            duration_sec=int(duration or 0),
+            status="queued",
+            stage="queued",
+            progress=0.0,
+        )
+    except Exception:
+        pass
+
+    now = datetime.utcnow()
+    job = Job(
+        id=job_id,
+        created_at=now,
+        updated_at=now,
+        status=JobStatus.queued,
+        original_filename=original,
+        video_path=str(dest),
+        collection_id=collection_id,
+        duration_sec=duration,
+    )
+    db.add(job)
+    db.commit()
+
+    enqueue_job(job_id)
+    return UploadResponse(
+        job_id=job_id,
+        status=job.status.value,
+        collection_id=collection_id,
+        channel_id=channel.id,
+        channel_name=channel.name,
+        suggested_channel_name=suggested,
+        suggestion_confidence=conf,
+    )
+
+
 def create_app() -> FastAPI:
     ensure_dir(settings.data_dir)
     ensure_dir(settings.models_dir)
@@ -302,15 +387,25 @@ def create_app() -> FastAPI:
     except Exception:
         pass
 
-    cors_origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_origin_regex=(settings.cors_origin_regex or None),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if settings.cors_allow_all:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_origin_regex=None,
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        cors_origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_origin_regex=(settings.cors_origin_regex or None),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.get("/health", response_model=HealthOut)
     def health() -> HealthOut:
@@ -349,82 +444,67 @@ def create_app() -> FastAPI:
         channel_name: str = Form(""),
         db: Session = Depends(get_db),
     ) -> UploadResponse:
-        if not file:
-            raise HTTPException(status_code=400, detail="file is required")
-        job_id = str(uuid.uuid4())
-        original = safe_filename(file.filename or "upload.mp4")
-        suggested, conf = _suggest_channel_name([original])
-        final_channel = channel_name.strip() or suggested
-        channel = _get_or_create_channel(db, final_channel)
-        collection_id = str(uuid.uuid4())
-        collection = Collection(
-            id=collection_id,
-            created_at=datetime.utcnow(),
-            channel_id=channel.id,
-            title=f"{channel.name} single upload",
-        )
-        db.add(collection)
-        db.commit()
-        ext = Path(original).suffix or ".mp4"
-        dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
+        return await _upload_multipart_core(file, channel_name, db)
 
-        # Stream to disk to support multi-GB uploads (3h videos).
-        with dest.open("wb") as f:
-            while True:
-                chunk = await file.read(1024 * 1024 * 8)  # 8MB
-                if not chunk:
-                    break
-                f.write(chunk)
-
-        duration = probe_duration_sec(str(dest), ffprobe_bin=settings.ffprobe_bin)
-        # Persist to Supabase Storage + DB (best-effort). Always upsert analyses row when Supabase is configured
-        # so dashboard works even if Storage rejects (e.g. plan size cap) — job still runs from local disk.
-        storage_path = f"{job_id}/{original}"
-        storage_ok = False
-        try:
-            upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
-            storage_ok = True
-        except Exception:
-            pass
-        try:
-            upsert_analysis_row(
-                analysis_id=job_id,
-                source_type="upload",
-                source_url="",
-                title=original,
-                video_storage_path=storage_path if storage_ok else "",
-                duration_sec=int(duration or 0),
-                status="queued",
+    @app.post("/api/upload", response_model=FastUploadResponse)
+    async def api_upload(
+        request: Request,
+        db: Session = Depends(get_db),
+    ) -> FastUploadResponse:
+        """
+        Production upload: multipart file (streamed to disk + Storage) or JSON body for an existing Storage path.
+        Returns immediately with queued analysis id — processing runs in the worker.
+        """
+        ct = (request.headers.get("content-type") or "").lower()
+        if "application/json" in ct:
+            body = UploadRegisterIn.model_validate(await request.json())
+            storage_path = (body.storage_path or "").strip()
+            if not storage_path:
+                raise HTTPException(status_code=400, detail="storage_path is required")
+            job_id = str(uuid.uuid4())
+            original = safe_filename(body.original_filename or "upload.mp4")
+            dest = build_local_upload_path(job_id, original)
+            now = datetime.utcnow()
+            job = Job(
+                id=job_id,
+                created_at=now,
+                updated_at=now,
+                status=JobStatus.queued,
+                original_filename=original,
+                video_path=str(dest),
+                collection_id="",
+                duration_sec=0,
                 stage="queued",
                 progress=0.0,
+                error_message="",
+                result_path="",
             )
-        except Exception:
-            pass
+            db.add(job)
+            db.commit()
+            try:
+                upsert_analysis_row(
+                    analysis_id=job_id,
+                    source_type="upload",
+                    source_url="",
+                    title=original,
+                    video_storage_path=storage_path,
+                    duration_sec=0,
+                    status="queued",
+                    stage="queued",
+                    progress=0.0,
+                )
+            except Exception:
+                pass
+            enqueue_task("app.supabase_storage_tasks.download_from_supabase_then_enqueue", job_id, storage_path)
+            return FastUploadResponse(analysis_id=job_id, status="queued")
 
-        now = datetime.utcnow()
-        job = Job(
-            id=job_id,
-            created_at=now,
-            updated_at=now,
-            status=JobStatus.queued,
-            original_filename=original,
-            video_path=str(dest),
-            collection_id=collection_id,
-            duration_sec=duration,
-        )
-        db.add(job)
-        db.commit()
-
-        enqueue_job(job_id)
-        return UploadResponse(
-            job_id=job_id,
-            status=job.status.value,
-            collection_id=collection_id,
-            channel_id=channel.id,
-            channel_name=channel.name,
-            suggested_channel_name=suggested,
-            suggestion_confidence=conf,
-        )
+        form = await request.form()
+        uf = form.get("file")
+        channel_name = str(form.get("channel_name") or "")
+        if not uf or not hasattr(uf, "read"):
+            raise HTTPException(status_code=400, detail="file is required (multipart field 'file')")
+        resp = await _upload_multipart_core(uf, channel_name, db)  # type: ignore[arg-type]
+        return FastUploadResponse(analysis_id=resp.job_id, status="queued")
 
     # Path must not be `/api/jobs/youtube` — that collides with `GET /api/jobs/{job_id}` (job_id="youtube" → 405 on POST).
     @app.post("/api/jobs/from-youtube", response_model=UploadResponse)
@@ -555,8 +635,7 @@ def create_app() -> FastAPI:
         now = datetime.utcnow()
         for file, original in zip(files, originals):
             job_id = str(uuid.uuid4())
-            ext = Path(original).suffix or ".mp4"
-            dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
+            dest = build_local_upload_path(job_id, original)
 
             with dest.open("wb") as f:
                 while True:
@@ -565,7 +644,7 @@ def create_app() -> FastAPI:
                         break
                     f.write(chunk)
 
-            duration = probe_duration_sec(str(dest), ffprobe_bin=settings.ffprobe_bin)
+            duration = 0
             storage_path = f"{job_id}/{original}"
             try:
                 upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
@@ -622,11 +701,41 @@ def create_app() -> FastAPI:
         return {"analyses": rows}
 
     @app.get("/api/analyses/{analysis_id}")
-    def api_get_analysis(analysis_id: str) -> dict:
-        row = get_analysis(analysis_id)
-        if not row:
-            raise HTTPException(status_code=404, detail="analysis not found (or Supabase not configured)")
-        return {"analysis": row}
+    def api_get_analysis(analysis_id: str, db: Session = Depends(get_db)) -> dict:
+        from app.supabase_client import get_analysis_by_job_id, get_result_json_for_job, list_events_for_analysis_uuid
+
+        job = db.get(Job, analysis_id)
+        row = get_analysis(analysis_id) or get_analysis_by_job_id(analysis_id)
+        events: list = []
+        if row and row.get("id"):
+            events = list_events_for_analysis_uuid(str(row["id"]))
+        result_json = get_result_json_for_job(analysis_id)
+        if result_json is None and job and job.result_path and Path(job.result_path).exists():
+            try:
+                result_json = json.loads(Path(job.result_path).read_text(encoding="utf-8"))
+            except Exception:
+                result_json = None
+        if not row and not job:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        job_payload = None
+        if job:
+            p = float(job.progress or 0.0)
+            job_payload = {
+                "id": job.id,
+                "status": job.status.value,
+                "stage": job.stage,
+                "progress": p,
+                "progress_percent": max(0, min(100, int(round(p * 100)))),
+                "original_filename": job.original_filename,
+                "duration_sec": job.duration_sec,
+                "error_message": job.error_message or "",
+            }
+        return {
+            "analysis": row,
+            "job": job_payload,
+            "result_json": result_json,
+            "events": events,
+        }
 
     @app.get("/api/analyses/{analysis_id}/result")
     def api_get_analysis_result(analysis_id: str) -> dict:
@@ -808,6 +917,22 @@ def create_app() -> FastAPI:
         }
         rid = create_comparison_report(left_analysis_id=left_id, right_analysis_id=right_id, report=report)
         return {"comparison_report_id": rid, "report": report}
+
+    @app.post("/api/compare")
+    def api_compare(payload: dict) -> dict:
+        """Alias for /api/compare/from-analyses with optional left_id/right_id keys."""
+        left_id = str(
+            payload.get("left_analysis_id") or payload.get("left_id") or payload.get("analysis_a") or ""
+        ).strip()
+        right_id = str(
+            payload.get("right_analysis_id") or payload.get("right_id") or payload.get("analysis_b") or ""
+        ).strip()
+        if not left_id or not right_id:
+            raise HTTPException(
+                status_code=400,
+                detail="left_analysis_id and right_analysis_id are required (or left_id / right_id)",
+            )
+        return api_compare_from_analyses({"left_analysis_id": left_id, "right_analysis_id": right_id})
 
     @app.get("/api/collections/{collection_id}/summary", response_model=CollectionSummaryOut)
     def get_collection_summary(collection_id: str, db: Session = Depends(get_db)) -> CollectionSummaryOut:

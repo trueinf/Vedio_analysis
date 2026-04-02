@@ -156,6 +156,56 @@ export async function uploadVideo(
   return await res.json();
 }
 
+/** POST /api/upload — returns immediately with analysis_id (no ffprobe in request). */
+export async function uploadVideoFast(
+  file: File,
+  channelName = ""
+): Promise<{ analysis_id: string; status: "queued" }> {
+  const form = new FormData();
+  form.append("file", file);
+  if (channelName.trim()) form.append("channel_name", channelName.trim());
+  const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  return await res.json();
+}
+
+export type AnalysisDetail = {
+  analysis: Record<string, unknown> | null;
+  job: {
+    id: string;
+    status: JobStatus;
+    stage: string;
+    progress: number;
+    progress_percent: number;
+    original_filename: string;
+    duration_sec: number;
+    error_message: string;
+  } | null;
+  result_json: Record<string, unknown> | null;
+  events: unknown[];
+};
+
+/** Unified analysis row + SQLite job progress + result_json + events (poll while processing). */
+export async function getAnalysisDetail(analysisId: string): Promise<AnalysisDetail> {
+  const res = await fetch(`${API_BASE}/api/analyses/${analysisId}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Analysis fetch failed (${res.status})`);
+  return await res.json();
+}
+
+/** POST /api/compare — two completed analyses by job/analysis id. */
+export async function compareAnalyses(leftAnalysisId: string, rightAnalysisId: string): Promise<{
+  comparison_report_id?: string;
+  report: unknown;
+}> {
+  const res = await fetch(`${API_BASE}/api/compare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ left_analysis_id: leftAnalysisId, right_analysis_id: rightAnalysisId }),
+  });
+  if (!res.ok) throw new Error(`Compare failed (${res.status})`);
+  return await res.json();
+}
+
 export async function uploadVideos(
   files: File[],
   channelName = "",

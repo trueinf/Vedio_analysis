@@ -1,3 +1,9 @@
+import { redirect } from "next/navigation";
+
+export default function ComparisonRedirectPage() {
+  redirect("/compare");
+}
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";

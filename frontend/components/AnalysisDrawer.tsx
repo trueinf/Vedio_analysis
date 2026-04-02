@@ -126,6 +126,11 @@ export function AnalysisDrawer(props: {
   const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
   const onSeek = (t0: number, _t1?: number) => {
     setCurrentTime(Number(t0 || 0));
+    // This drawer has no primary video element to control; jump to the dedicated video page.
+    if (props.jobId) {
+      const t = Math.max(0, Number(t0 || 0));
+      window.location.href = `/video/${encodeURIComponent(props.jobId)}?t=${encodeURIComponent(String(t))}`;
+    }
   };
 
   return (
@@ -137,9 +142,21 @@ export function AnalysisDrawer(props: {
             <div className="text-sm font-semibold truncate">Analysis</div>
             <div className="text-xs text-slate-400 truncate">{props.jobId}</div>
           </div>
-          <Button variant="premium-ghost" onClick={props.onClose}>
-            Close ✕
-          </Button>
+          <div className="flex items-center gap-2">
+            {props.jobId ? (
+              <Button
+                variant="premium-ghost"
+                onClick={() => {
+                  window.location.href = `/video/${encodeURIComponent(props.jobId)}`;
+                }}
+              >
+                Open Video
+              </Button>
+            ) : null}
+            <Button variant="premium-ghost" onClick={props.onClose}>
+              Close ✕
+            </Button>
+          </div>
         </div>
 
         <div className="h-[calc(100%-3.5rem)] overflow-auto p-4">

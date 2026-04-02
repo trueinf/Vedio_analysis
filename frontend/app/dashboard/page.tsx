@@ -1,34 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AnalysisSummary } from "../../lib/supabase";
-import { AnalysisCard } from "../../components/AnalysisCard";
-import { AnalysisDrawer } from "../../components/AnalysisDrawer";
 import { StatsBar } from "../../components/StatsBar";
-import { TrendCharts } from "../../components/TrendCharts";
+import type { AnalysisSummary } from "@/lib/supabase";
+import DashboardCard from "@/components/DashboardCard";
 
-type StatusFilter = "all" | "completed" | "processing" | "failed";
+type StatusFilter = "all" | "queued" | "processing" | "completed" | "failed";
 
 export default function DashboardPage() {
-  const [highlight, setHighlight] = useState<string>("");
-
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [analyses, setAnalyses] = useState<AnalysisSummary[]>([]);
-  const [stats, setStats] = useState<{ total: number; avgScore: number; avgWpm: number; avgEye: number } | null>(null);
 
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
-
-  const [openJobId, setOpenJobId] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useEffect(() => {
-    // Avoid Next.js build-time CSR bailout requirements for useSearchParams by reading from window.
-    if (typeof window === "undefined") return;
-    const h = new URLSearchParams(window.location.search).get("highlight") || "";
-    setHighlight(h);
-  }, []);
 
   useEffect(() => {
     (async () => {
@@ -36,25 +21,10 @@ export default function DashboardPage() {
       setErr("");
       try {
         const base = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
-        const [listRes, statsRes] = await Promise.all([
-          fetch(`${base}/api/supabase/analyses?limit=500&offset=0`, { cache: "no-store" }),
-          fetch(`${base}/api/supabase/stats`, { cache: "no-store" }),
-        ]);
+        const listRes = await fetch(`${base}/api/analyses?limit=500`, { cache: "no-store" });
         if (!listRes.ok) throw new Error(`Failed to load analyses (${listRes.status})`);
         const listJson = (await listRes.json()) as { analyses: AnalysisSummary[] };
         setAnalyses(listJson.analyses || []);
-
-        if (statsRes.ok) {
-          const s = await statsRes.json();
-          setStats({
-            total: Number(s.total_analyses || 0),
-            avgScore: Number(s.avg_overall_score || 0),
-            avgWpm: Number(s.avg_wpm || 0),
-            avgEye: Number(s.avg_eye_contact || 0),
-          });
-        } else {
-          setStats({ total: listJson.analyses?.length || 0, avgScore: 0, avgWpm: 0, avgEye: 0 });
-        }
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load dashboard");
         setAnalyses([]);
@@ -63,12 +33,6 @@ export default function DashboardPage() {
       }
     })();
   }, []);
-
-  useEffect(() => {
-    if (!highlight) return;
-    setOpenJobId(highlight);
-    setDrawerOpen(true);
-  }, [highlight]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -84,6 +48,18 @@ export default function DashboardPage() {
       });
   }, [analyses, q, filter]);
 
+  const stats = useMemo(() => {
+    if (!analyses.length) return { total: 0, avgScore: 0, avgWpm: 0, avgEye: 0 };
+    const nums = (key: keyof AnalysisSummary) => analyses.map((a) => Number(a[key] as any)).filter((n) => Number.isFinite(n));
+    const avg = (arr: number[]) => (arr.length ? arr.reduce((s, n) => s + n, 0) / arr.length : 0);
+    return {
+      total: analyses.length,
+      avgScore: avg(nums("overall_score")),
+      avgWpm: avg(nums("wpm")),
+      avgEye: avg(nums("eye_contact_ratio")),
+    };
+  }, [analyses]);
+
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
       <div className="flex items-start justify-between gap-4">
@@ -95,10 +71,10 @@ export default function DashboardPage() {
 
       <div className="mt-6">
         <StatsBar
-          total={stats?.total ?? analyses.length}
-          avgScore={stats?.avgScore ?? 0}
-          avgWpm={stats?.avgWpm ?? 0}
-          avgEyeContact={stats?.avgEye ?? 0}
+          total={stats.total}
+          avgScore={stats.avgScore}
+          avgWpm={stats.avgWpm}
+          avgEyeContact={stats.avgEye}
           loading={loading}
           error={err}
         />
@@ -111,8 +87,8 @@ export default function DashboardPage() {
           placeholder="Search filename, channel, job id…"
           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
         />
-        <div className="flex items-center gap-2">
-          {(["all", "completed", "processing", "failed"] as const).map((s) => (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(["all", "queued", "processing", "completed", "failed"] as const).map((s) => (
             <button
               key={s}
               type="button"
@@ -125,10 +101,6 @@ export default function DashboardPage() {
             </button>
           ))}
         </div>
-      </div>
-
-      <div className="mt-6">
-        <TrendCharts analyses={analyses} />
       </div>
 
       <div className="mt-8">
@@ -147,28 +119,11 @@ export default function DashboardPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((a) => (
-              <AnalysisCard
-                key={a.job_id}
-                analysis={a}
-                onOpen={(jobId) => {
-                  setOpenJobId(jobId);
-                  setDrawerOpen(true);
-                }}
-              />
+              <DashboardCard key={a.job_id} analysis={a} />
             ))}
           </div>
         )}
       </div>
-
-      <AnalysisDrawer
-        open={drawerOpen}
-        jobId={openJobId}
-        onClose={() => {
-          setDrawerOpen(false);
-          setOpenJobId(null);
-        }}
-        highlightJobId={highlight}
-      />
     </div>
   );
 }

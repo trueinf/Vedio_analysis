@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex items-center gap-1">
               <NavLink href="/" label="Process" icon="⬆" />
               <NavLink href="/dashboard" label="Dashboard" icon="📊" />
-              <NavLink href="/comparison" label="Compare" icon="⚡" />
+              <NavLink href="/compare" label="Compare" icon="⚡" />
             </div>
           </div>
         </nav>

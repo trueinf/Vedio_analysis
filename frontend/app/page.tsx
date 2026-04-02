@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getJob, uploadVideo, uploadVideos } from "../lib/api";
+import { VideoDropzone } from "@/components/VideoDropzone";
 
 type JobRow = {
   id: string;
@@ -18,8 +19,7 @@ export default function ProcessPage() {
   const [channelName, setChannelName] = useState("");
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  //
 
   useEffect(() => {
     const active = jobs.filter((j) => j.status === "queued" || j.status === "processing");
@@ -66,13 +66,6 @@ export default function ProcessPage() {
     }
   }
 
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragOver(false);
-    const dropped = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("video/"));
-    setFiles(dropped);
-  }
-
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
       <div className="mb-8">
@@ -80,35 +73,7 @@ export default function ProcessPage() {
         <p className="text-slate-400 mt-1">Upload videos for AI-powered delivery analysis</p>
       </div>
 
-      <div
-        onDrop={handleDrop}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onClick={() => fileInputRef.current?.click()}
-        className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${
-          dragOver ? "border-cyan-400 bg-cyan-400/10" : "border-white/20 hover:border-white/40 hover:bg-white/5"
-        }`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="video/*"
-          multiple
-          className="hidden"
-          onChange={(e) => setFiles(Array.from(e.target.files || []))}
-        />
-        <div className="text-5xl mb-4">🎬</div>
-        <div className="text-lg font-medium">Drop videos here or click to browse</div>
-        <div className="text-slate-400 text-sm mt-1">Supports MP4, MOV, AVI, WebM • Up to 3 hours</div>
-        {files.length > 0 ? (
-          <div className="mt-4 text-cyan-400 font-medium">
-            {files.length} file(s) selected: {files.map((f) => f.name).join(", ")}
-          </div>
-        ) : null}
-      </div>
+      <VideoDropzone files={files} onFilesChange={setFiles} />
 
       <div className="mt-6 flex items-center gap-4">
         <input

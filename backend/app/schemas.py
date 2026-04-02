@@ -59,6 +59,21 @@ class UploadResponse(BaseModel):
     message: str = Field(default="uploaded")
 
 
+class FastUploadResponse(BaseModel):
+    """Immediate response after upload is queued — no processing in the request."""
+
+    analysis_id: str
+    status: Literal["queued"] = "queued"
+
+
+class UploadRegisterIn(BaseModel):
+    """Register a video already in Supabase Storage (or path the worker will fetch)."""
+
+    storage_path: str = Field(default="", description="Object path within the videos bucket")
+    original_filename: str = "upload.mp4"
+    channel_name: str = ""
+
+
 class YouTubeJobIn(BaseModel):
     url: str = Field(default="", description="YouTube video URL")
     channel_name: str = ""

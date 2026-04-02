@@ -182,6 +182,10 @@ def get_analysis(analysis_id: str) -> dict[str, Any] | None:
         return None
     sb = _client()
     try:
+        res = sb.table("analyses").select("*").eq("job_id", analysis_id).limit(1).execute()
+        rows = list(res.data or [])
+        if rows:
+            return rows[0]
         res = sb.table("analyses").select("*").eq("id", analysis_id).limit(1).execute()
         rows = list(res.data or [])
         return rows[0] if rows else None
@@ -194,7 +198,23 @@ def get_result(analysis_id: str) -> dict[str, Any] | None:
     if not _configured():
         return None
     sb = _client()
+    # Prefer normalized analysis_results + job_id lookups when available
+    try:
+        from app.supabase_client import get_result_json_for_job
+
+        rj = get_result_json_for_job(analysis_id)
+        if rj:
+            return rj
+    except Exception:
+        pass
     # Try result_json column in analyses first
+    try:
+        res = sb.table("analyses").select("result_json").eq("job_id", analysis_id).limit(1).execute()
+        rows = list(res.data or [])
+        if rows and rows[0].get("result_json"):
+            return rows[0]["result_json"]
+    except Exception:
+        pass
     try:
         res = sb.table("analyses").select("result_json").eq("id", analysis_id).limit(1).execute()
         rows = list(res.data or [])
@@ -202,7 +222,7 @@ def get_result(analysis_id: str) -> dict[str, Any] | None:
             return rows[0]["result_json"]
     except Exception:
         pass
-    # Fallback: analysis_results table
+    # Fallback: analysis_results table keyed by job_id (legacy)
     try:
         res = sb.table("analysis_results").select("result_json").eq("analysis_id", analysis_id).limit(1).execute()
         rows = list(res.data or [])

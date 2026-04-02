@@ -56,7 +56,7 @@ export function AnalysisCard(props: {
             {a.created_at ? new Date(a.created_at).toLocaleString() : ""}
           </div>
           <Link
-            href={`/comparison?source=${encodeURIComponent(a.job_id)}`}
+            href={`/compare?source=${encodeURIComponent(a.job_id)}`}
             onClick={(e) => e.stopPropagation()}
             className="text-xs text-cyan-300 hover:text-cyan-200"
           >

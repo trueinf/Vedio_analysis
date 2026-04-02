@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     api_base_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,https://vedioanalysis.netlify.app"
     cors_origin_regex: str = r"^https://.*\.netlify\.app$"
+    # When True, allow any origin (use with allow_credentials=False). Set CORS_ALLOW_ALL=true on Railway if needed.
+    cors_allow_all: bool = Field(default=False, validation_alias=AliasChoices("CORS_ALLOW_ALL"))
 
     redis_url: str = "redis://localhost:6379/0"
 

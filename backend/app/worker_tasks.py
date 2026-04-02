@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,16 @@ from app.pipeline.media import extract_audio_wav, normalize_video
 from app.orchestrator import Orchestrator
 from app.models import Feedback, Metrics, Video, YouTubeVideo, YouTubeVideoStatus
 from app.supabase_repo import update_analysis_status, put_result_json
-from app.supabase_client import update_analysis_status as sb_update_analysis_status
+from app.supabase_client import (
+    get_analysis_by_job_id,
+    replace_events_for_analysis_uuid,
+    store_completed_analysis,
+    update_analysis_status as sb_update_analysis_status,
+    upsert_analysis_results_row,
+)
+from app.video_meta import probe_duration_sec
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_local_upload_file(job: Job) -> str:
@@ -31,8 +41,6 @@ def _ensure_local_upload_file(job: Job) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     candidates: list[str] = []
     try:
-        from app.supabase_client import get_analysis_by_job_id
-
         row = get_analysis_by_job_id(job.id)
         if row:
             vp = (row.get("video_storage_path") or "").strip().lstrip("/")
@@ -105,8 +113,28 @@ def process_job(job_id: str) -> None:
         sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
 
         local_video = _ensure_local_upload_file(job)
+        logger.info("Processing file: %s", local_video)
+        dur = int(probe_duration_sec(local_video, ffprobe_bin=settings.ffprobe_bin) or 0)
+        job.duration_sec = dur
+        job.updated_at = datetime.utcnow()
+        db.commit()
+
         normalize_video(local_video, normalized, ffmpeg_bin=settings.ffmpeg_bin)
+        job.stage = "preprocessing"
+        job.progress = 0.25
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        update_analysis_status(analysis_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
+        sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
+
         extract_audio_wav(normalized, wav_path, ffmpeg_bin=settings.ffmpeg_bin, sr=16000)
+        job.stage = "analyzing"
+        job.progress = 0.45
+        job.updated_at = datetime.utcnow()
+        db.commit()
+        update_analysis_status(analysis_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
+        sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
+
         orch = Orchestrator()
         result = {"job_id": job.id, **orch.run(db, job, normalized_video=normalized, wav_path=wav_path)}
 
@@ -114,8 +142,6 @@ def process_job(job_id: str) -> None:
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
         # Dual-write completed result to Supabase (new schema) before finalizing SQLite job status.
-        from app.supabase_client import store_completed_analysis
-
         channel = ""
         try:
             from app.models import Collection, Channel
@@ -134,6 +160,11 @@ def process_job(job_id: str) -> None:
             duration_sec=job.duration_sec,
             channel_name=channel,
         )
+        sb_row = get_analysis_by_job_id(job.id)
+        if sb_row and sb_row.get("id"):
+            aid = str(sb_row["id"])
+            upsert_analysis_results_row(aid, result)
+            replace_events_for_analysis_uuid(aid, list(result.get("events") or []))
 
         # Persist normalized data model (Video/Metrics/Feedback)
         now = datetime.utcnow()
@@ -172,6 +203,7 @@ def process_job(job_id: str) -> None:
             ytv.updated_at = datetime.utcnow()
             db.commit()
     except Exception as e:
+        logger.exception("process_job failed for %s", job_id)
         job = db.get(Job, job_id)
         if job:
             job.status = JobStatus.failed
