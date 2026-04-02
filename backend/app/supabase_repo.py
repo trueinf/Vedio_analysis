@@ -103,6 +103,8 @@ def upsert_analysis_row(
         "updated_at": now,
         "source_type": source_type,
         "source_url": source_url or "",
+        # Keep dashboard UX friendly: show the uploaded filename even before completion.
+        "original_filename": title or "",
         "title": title or "",
         "video_storage_path": video_storage_path or "",
         "duration_sec": int(duration_sec or 0),
