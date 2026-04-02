@@ -66,6 +66,7 @@ from app.supabase_repo import (
     create_comparison_report,
     ensure_bucket_exists,
     create_signed_upload_url,
+    create_signed_download_url,
 )
 from app.services.file_service import build_local_upload_path
 from app.youtube_service import normalize_channel_handle
@@ -434,6 +435,22 @@ def create_app() -> FastAPI:
         out = create_signed_upload_url(bucket=bucket, path=path)
         if not out.get("signed_url") or not out.get("token"):
             raise HTTPException(status_code=500, detail="failed to create signed upload url")
+        return {"bucket": bucket, **out}
+
+    @app.post("/api/supabase/storage/signed-download-url")
+    def supabase_signed_download_url(payload: dict) -> dict:
+        """
+        Create a signed download URL for client-side playback.
+        Payload: { path: string, bucket?: string, expires_in_sec?: number }
+        """
+        path = str(payload.get("path") or "").strip()
+        bucket = str(payload.get("bucket") or settings.supabase_bucket).strip()
+        expires = int(payload.get("expires_in_sec") or 3600)
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        out = create_signed_download_url(bucket=bucket, path=path, expires_in_sec=expires)
+        if not out.get("signed_url"):
+            raise HTTPException(status_code=500, detail="failed to create signed download url")
         return {"bucket": bucket, **out}
 
     # Netlify / misconfigured clients sometimes POST to `/upload` instead of `/api/jobs/upload`.

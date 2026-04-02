@@ -80,6 +80,26 @@ def create_signed_upload_url(*, bucket: str, path: str) -> dict[str, str]:
     return {"signed_url": signed_url, "token": token, "path": p}
 
 
+def create_signed_download_url(*, bucket: str, path: str, expires_in_sec: int = 3600) -> dict[str, str]:
+    """
+    Create a signed *download* URL for a private object in Storage.
+    Uses backend service role key (safe for Netlify clients).
+    """
+    if not _configured():
+        raise RuntimeError("Supabase is not configured")
+    sb = _client()
+    b = (bucket or settings.supabase_bucket).strip()
+    p = (path or "").lstrip("/")
+    if not b or not p:
+        raise RuntimeError("bucket and path are required")
+    ensure_bucket_exists(b)
+    bucket_client = sb.storage.from_(b)
+    data = bucket_client.create_signed_url(p, int(expires_in_sec or 3600))
+    if isinstance(data, dict):
+        return {"signed_url": str(data.get("signed_url") or data.get("signedURL") or ""), "path": p}
+    signed_url = str(getattr(data, "signed_url", "") or getattr(data, "signedURL", "") or "")
+    return {"signed_url": signed_url, "path": p}
+
 def upsert_analysis_row(
     *,
     analysis_id: str,

@@ -11,7 +11,7 @@ import { MomentsPanel } from "@/components/MomentsPanel";
 import { CoachPanel } from "@/components/CoachPanel";
 
 import type { AnalysisDetail } from "@/lib/api";
-import { getAnalysisDetail } from "@/lib/api";
+import { getAnalysisDetail, getApiBaseUrl } from "@/lib/api";
 import { supabase as sbClient } from "@/lib/supabaseClient";
 
 import type { MetricEvent } from "@/components/video-analysis-types";
@@ -94,7 +94,27 @@ function deriveKeyInsights(result: any, durationSec: number): { insights: string
 
 async function resolveSignedVideoUrl(params: { storagePath: string; bucket: string }) {
   const { storagePath, bucket } = params;
-  if (!sbClient || !storagePath) return "";
+  if (!storagePath) return "";
+
+  // Preferred: ask backend to create a signed download URL (service role key, no browser policies).
+  try {
+    const base = getApiBaseUrl();
+    const res = await fetch(`${base}/api/supabase/storage/signed-download-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bucket, path: storagePath, expires_in_sec: 3600 }),
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const signed = String(data?.signed_url || "");
+      if (signed) return signed;
+    }
+  } catch {
+    // fall through
+  }
+
+  // Fallback: supabase-js (requires NEXT_PUBLIC_SUPABASE_* and Storage policies).
+  if (!sbClient) return "";
 
   // supabase-js supports `createSignedUrl` for private buckets when RLS/policies allow.
   try {
