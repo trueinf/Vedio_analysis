@@ -341,7 +341,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="failed to create signed upload url")
         return {"bucket": bucket, **out}
 
+    # Netlify / misconfigured clients sometimes POST to `/upload` instead of `/api/jobs/upload`.
     @app.post("/api/jobs/upload", response_model=UploadResponse)
+    @app.post("/upload", response_model=UploadResponse, include_in_schema=False)
     async def upload_video(
         file: UploadFile = File(...),
         channel_name: str = Form(""),

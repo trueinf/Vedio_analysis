@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +18,10 @@ class Settings(BaseSettings):
     results_dir: str = "data/results"
     clips_dir: str = "data/clips"
     models_dir: str = "data/models"
-    db_url: str = "sqlite:///./data/app.db"
+    db_url: str = Field(
+        default="sqlite:///./data/app.db",
+        validation_alias=AliasChoices("DB_URL", "DATABASE_URL"),
+    )
 
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
@@ -48,6 +52,13 @@ class Settings(BaseSettings):
     # Max object size for the Storage bucket (bytes). Applied on ensure-bucket via update_bucket.
     # Supabase Free tier may still enforce a lower project-wide cap; raise in Dashboard or upgrade if uploads fail.
     supabase_bucket_file_size_limit_bytes: int = 5368709120  # 5 GiB
+
+    @model_validator(mode="after")
+    def _merge_supabase_service_keys(self) -> "Settings":
+        # Deployments often set SUPABASE_SERVICE_KEY; supabase_repo reads supabase_service_role_key.
+        if not (self.supabase_service_role_key or "").strip() and (self.supabase_service_key or "").strip():
+            object.__setattr__(self, "supabase_service_role_key", self.supabase_service_key.strip())
+        return self
 
 
 settings = Settings()

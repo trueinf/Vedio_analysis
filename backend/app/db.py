@@ -8,10 +8,21 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine(
-    settings.db_url,
-    connect_args={"check_same_thread": False} if settings.db_url.startswith("sqlite") else {},
-)
+def _engine_kwargs():
+    url = settings.db_url or ""
+    if url.startswith("sqlite"):
+        return dict(
+            connect_args={"check_same_thread": False},
+        )
+    # Postgres (Railway / Neon / etc.): avoid stale connections and long hangs.
+    return dict(
+        pool_pre_ping=True,
+        pool_recycle=280,
+        connect_args={"connect_timeout": 15},
+    )
+
+
+engine = create_engine(settings.db_url, **_engine_kwargs())
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

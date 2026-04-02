@@ -1,4 +1,14 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+/** Base URL for the FastAPI backend only (no path suffix). */
+function getApiBase(): string {
+  let b = (process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000").trim();
+  b = b.replace(/\/+$/, "");
+  // Common misconfig: user sets .../api/jobs — strip so we don't double paths.
+  b = b.replace(/\/api\/jobs\/?$/i, "");
+  b = b.replace(/\/api\/?$/i, "");
+  return b;
+}
+
+const API_BASE = getApiBase();
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed";
 
