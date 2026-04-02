@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import statistics
 import re
 import uuid
@@ -54,6 +55,8 @@ from app.schemas import (
     UploadRegisterIn,
 )
 from app.settings import settings
+
+logger = logging.getLogger(__name__)
 from app.utils.files import ensure_dir, safe_filename
 from app.worker_queue import enqueue_job, enqueue_task
 from app.supabase_repo import (
@@ -388,25 +391,25 @@ def create_app() -> FastAPI:
     except Exception:
         pass
 
-    if settings.cors_allow_all:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_origin_regex=None,
-            allow_credentials=False,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    else:
-        cors_origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_origins,
-            allow_origin_regex=(settings.cors_origin_regex or None),
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+    def _merge_cors_origins() -> list[str]:
+        origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
+        for extra in (
+            "https://vedioanalysis.netlify.app",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ):
+            if extra not in origins:
+                origins.append(extra)
+        return origins
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_merge_cors_origins(),
+        allow_origin_regex=(settings.cors_origin_regex or None),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health", response_model=HealthOut)
     def health() -> HealthOut:
@@ -944,18 +947,24 @@ def create_app() -> FastAPI:
     @app.post("/api/compare")
     def api_compare(payload: dict) -> dict:
         """Alias for /api/compare/from-analyses with optional left_id/right_id keys."""
-        left_id = str(
-            payload.get("left_analysis_id") or payload.get("left_id") or payload.get("analysis_a") or ""
-        ).strip()
-        right_id = str(
-            payload.get("right_analysis_id") or payload.get("right_id") or payload.get("analysis_b") or ""
-        ).strip()
-        if not left_id or not right_id:
-            raise HTTPException(
-                status_code=400,
-                detail="left_analysis_id and right_analysis_id are required (or left_id / right_id)",
-            )
-        return api_compare_from_analyses({"left_analysis_id": left_id, "right_analysis_id": right_id})
+        try:
+            left_id = str(
+                payload.get("left_analysis_id") or payload.get("left_id") or payload.get("analysis_a") or ""
+            ).strip()
+            right_id = str(
+                payload.get("right_analysis_id") or payload.get("right_id") or payload.get("analysis_b") or ""
+            ).strip()
+            if not left_id or not right_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="left_analysis_id and right_analysis_id are required (or left_id / right_id)",
+                )
+            return api_compare_from_analyses({"left_analysis_id": left_id, "right_analysis_id": right_id})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Error in /api/compare: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/api/collections/{collection_id}/summary", response_model=CollectionSummaryOut)
     def get_collection_summary(collection_id: str, db: Session = Depends(get_db)) -> CollectionSummaryOut:

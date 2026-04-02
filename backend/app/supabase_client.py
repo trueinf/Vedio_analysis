@@ -116,10 +116,10 @@ def store_completed_analysis(
             "energy_score": int(result.get("energy_score") or 0),
         }
         try:
-            client.table("analyses").upsert(payload).execute()
+            client.table("analyses").update(payload).eq("job_id", job_id).execute()
         except Exception:
             payload.pop("progress_int", None)
-            client.table("analyses").upsert(payload).execute()
+            client.table("analyses").update(payload).eq("job_id", job_id).execute()
         return True
     except Exception as e:
         logger.exception("[Supabase] store_completed_analysis failed: %s", e)
