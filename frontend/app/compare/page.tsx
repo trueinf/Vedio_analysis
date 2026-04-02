@@ -111,6 +111,13 @@ export default function ComparePage() {
   const [busyUpload, setBusyUpload] = useState(false);
   const [busyCompare, setBusyCompare] = useState(false);
   const [compareReport, setCompareReport] = useState<any>(null);
+  const jobPollStartedRef = useRef<number>(0);
+  const [, bumpUi] = useState(0);
+  useEffect(() => {
+    if (!newJobId || (newStatus !== "queued" && newStatus !== "processing")) return;
+    const i = setInterval(() => bumpUi((x) => x + 1), 5000);
+    return () => clearInterval(i);
+  }, [newJobId, newStatus]);
 
   const completed = useMemo(() => (analyses || []).filter((a) => a.status === "completed"), [analyses]);
 
@@ -158,19 +165,19 @@ export default function ComparePage() {
     };
   }, [sourceId]);
 
-  // Poll new job status while analyzing.
+  // Poll new job status while analyzing (faster ticks early; fallback to Supabase detail if job API blips).
   useEffect(() => {
     if (!newJobId) return;
     if (newStatus === "completed" || newStatus === "failed") return;
     let alive = true;
-    let t: any = null;
+    let t: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
         const j = await getJob(newJobId);
         if (!alive) return;
         setNewStatus(j.status);
         setNewStage((j as any).stage || "");
-        setNewProgress(Number((j as any).progress || 0));
+        setNewProgress(Number((j as any).progress ?? 0));
         if (j.status === "failed") setNewError(j.error_message || "Analysis failed");
         if (j.status === "completed") {
           const d = await getAnalysisDetail(newJobId);
@@ -178,10 +185,24 @@ export default function ComparePage() {
           setNewDetail(d);
         }
       } catch {
-        // ignore transient polling blips
+        try {
+          const d = await getAnalysisDetail(newJobId);
+          if (!alive) return;
+          const st = String((d.job as any)?.status ?? (d.analysis as any)?.status ?? "");
+          if (st === "completed" || st === "processing" || st === "queued" || st === "failed") {
+            setNewStatus(st as JobStatus);
+            setNewStage(String((d.job as any)?.stage ?? ""));
+            setNewProgress(Number((d.job as any)?.progress ?? 0));
+            if (st === "completed") setNewDetail(d);
+          }
+        } catch {
+          // ignore
+        }
       }
       if (!alive) return;
-      t = setTimeout(tick, 3000);
+      const elapsed = Date.now() - (jobPollStartedRef.current || Date.now());
+      const delay = elapsed < 120_000 ? 1500 : 3000;
+      t = setTimeout(tick, delay);
     };
     tick();
     return () => {
@@ -322,6 +343,7 @@ export default function ComparePage() {
                 setCompareReport(null);
                 try {
                   const resp = await uploadVideoFast(files[0], channelName);
+                  jobPollStartedRef.current = Date.now();
                   setNewJobId(resp.analysis_id);
                   setNewStatus("queued");
                   setNewStage("queued");
@@ -370,6 +392,18 @@ export default function ComparePage() {
               ) : null}
 
               {newStatus === "failed" && newError ? <div className="mt-3 text-xs text-red-300">{newError.split("\n")[0]}</div> : null}
+
+              {newStatus === "queued" &&
+              jobPollStartedRef.current &&
+              Date.now() - jobPollStartedRef.current > 120_000 ? (
+                <div className="mt-3 text-xs text-amber-200/90 leading-relaxed">
+                  Still queued after 2+ minutes? On Railway, set{" "}
+                  <code className="text-slate-300">USE_RQ_QUEUE=false</code> unless you run a separate worker (
+                  <code className="text-slate-300">python -m app.worker</code>). Open{" "}
+                  <code className="text-slate-300">GET /health</code> — <code className="text-slate-300">worker_mode</code> should be{" "}
+                  <code className="text-slate-300">inline</code>.
+                </div>
+              ) : null}
             </div>
           ) : null}
         </Card>

@@ -46,6 +46,9 @@ class JobResultOut(BaseModel):
 
 class HealthOut(BaseModel):
     status: str = "ok"
+    # Helps verify production config: inline = daemon thread in API; rq = separate worker required
+    worker_mode: Literal["inline", "rq"] = "inline"
+    use_rq_queue: bool = False
 
 
 class UploadResponse(BaseModel):

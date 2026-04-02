@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from redis import Redis
-from rq import Queue
+from typing import TYPE_CHECKING
 
 from app.settings import settings
 
+if TYPE_CHECKING:
+    from rq import Queue as RQQueue
 
-def get_queue() -> Queue:
+
+def get_queue() -> "RQQueue":
+    """Imported lazily so API startup does not require Redis unless USE_RQ_QUEUE is enabled."""
+    from redis import Redis
+    from rq import Queue
+
     conn = Redis.from_url(settings.redis_url)
     return Queue("video-jobs", connection=conn, default_timeout=60 * 60 * 6)  # up to 6h
 

@@ -174,7 +174,7 @@ def list_events_for_analysis_uuid(analysis_uuid: str, limit: int = 5000) -> list
     if not client:
         return []
     try:
-        # events table may not have created_at until migration 003; order by t0 only.
+        # Omit created_at unless migration 003 ran (older DBs error with column events.created_at does not exist).
         res = (
             client.table("events")
             .select("id, metric, label, t0, t1, value")

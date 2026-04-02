@@ -410,7 +410,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthOut)
     def health() -> HealthOut:
-        return HealthOut()
+        return HealthOut(
+            status="ok",
+            worker_mode="rq" if settings.use_rq_queue else "inline",
+            use_rq_queue=bool(settings.use_rq_queue),
+        )
 
     @app.post("/api/supabase/storage/ensure-bucket")
     def supabase_ensure_bucket() -> dict:

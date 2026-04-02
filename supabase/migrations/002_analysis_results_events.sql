@@ -25,7 +25,8 @@ create table if not exists public.events (
   label text not null default '',
   t0 double precision not null default 0,
   t1 double precision not null default 0,
-  value double precision
+  value double precision,
+  created_at timestamptz default now()
 );
 
 create index if not exists idx_events_analysis_id on public.events (analysis_id);

@@ -26,6 +26,8 @@ export type Job = {
   original_filename: string;
   duration_sec: number;
   error_message: string;
+  stage?: string;
+  progress?: number;
 };
 
 export type JobHistoryItem = {
