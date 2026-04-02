@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     cors_allow_all: bool = Field(default=False, validation_alias=AliasChoices("CORS_ALLOW_ALL"))
 
     redis_url: str = "redis://localhost:6379/0"
+    # When False (default), run process_job in a daemon thread on the API process (works with a single container).
+    # Set True only if you run a separate RQ worker (e.g. `python -m app.worker`) against the same Redis.
+    use_rq_queue: bool = Field(default=False, validation_alias=AliasChoices("USE_RQ_QUEUE"))
 
     data_dir: str = "data"
     uploads_dir: str = "data/uploads"
