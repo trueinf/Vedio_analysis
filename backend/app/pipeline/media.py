@@ -6,8 +6,15 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+def run(cmd: list[str], *, timeout_sec: int | None = None) -> None:
+    subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout_sec,
+    )
 
 def _ffmpeg_available(ffmpeg_bin: str) -> bool:
     try:
@@ -17,32 +24,82 @@ def _ffmpeg_available(ffmpeg_bin: str) -> bool:
         return False
 
 
-def normalize_video(input_path: str, output_path: str, ffmpeg_bin: str = "ffmpeg") -> None:
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    if _ffmpeg_available(ffmpeg_bin):
-        run(
-            [
-                ffmpeg_bin,
-                "-y",
-                "-i",
-                input_path,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                output_path,
-            ]
+def _ffmpeg_ok(cmd: list[str], *, timeout_sec: int | None = 7200) -> bool:
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
         )
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def normalize_video(input_path: str, output_path: str, ffmpeg_bin: str = "ffmpeg") -> None:
+    """
+    Produce a predictable MP4 for the pipeline (H.264 + AAC when possible).
+
+    Some uploads fail a full re-encode (ffmpeg exit ~254): missing audio, odd codecs,
+    or container quirks. We fall back to remux, video-only encode, then raw copy.
+    """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    inp = str(Path(input_path))
+    out = str(Path(output_path))
+
+    if not _ffmpeg_available(ffmpeg_bin):
+        Path(out).write_bytes(Path(inp).read_bytes())
         return
 
-    # Fallback: skip normalization if ffmpeg isn't installed.
-    Path(output_path).write_bytes(Path(input_path).read_bytes())
+    # 1) Preferred: H.264 + AAC (matches most talking-head uploads)
+    if _ffmpeg_ok(
+        [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            inp,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            out,
+        ]
+    ):
+        return
+
+    # 2) Fast remux — keeps original streams; fixes many “copy”-friendly inputs
+    if _ffmpeg_ok([ffmpeg_bin, "-y", "-i", inp, "-c", "copy", "-movflags", "+faststart", out]):
+        return
+
+    # 3) Video only — inputs with no usable audio or broken audio track
+    if _ffmpeg_ok(
+        [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            inp,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            out,
+        ]
+    ):
+        return
+
+    # 4) Last resort: use upload as-is (pipeline may still analyze; audio extract uses its own fallbacks)
+    Path(out).write_bytes(Path(inp).read_bytes())
 
 
 def extract_audio_wav(input_video: str, wav_path: str, ffmpeg_bin: str = "ffmpeg", sr: int = 16000) -> None:
