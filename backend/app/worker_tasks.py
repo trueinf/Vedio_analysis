@@ -19,6 +19,60 @@ from app.supabase_repo import update_analysis_status, put_result_json
 from app.supabase_client import update_analysis_status as sb_update_analysis_status
 
 
+def _ensure_local_upload_file(job: Job) -> str:
+    """
+    API and worker often run as separate Railway services: uploads land on the API disk only.
+    If the file is missing locally, download from Supabase Storage (same path used on upload).
+    """
+    path = Path(job.video_path)
+    if path.is_file():
+        return str(path)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    candidates: list[str] = []
+    try:
+        from app.supabase_client import get_analysis_by_job_id
+
+        row = get_analysis_by_job_id(job.id)
+        if row:
+            vp = (row.get("video_storage_path") or "").strip().lstrip("/")
+            if vp:
+                candidates.append(vp)
+    except Exception:
+        pass
+    # Default upload layout: {job_id}/{safe_filename}
+    candidates.append(f"{job.id}/{job.original_filename}")
+
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    from app.supabase_repo import _configured, download_file_from_storage
+
+    if not _configured():
+        raise FileNotFoundError(
+            f"Video file not found at {job.video_path}. The worker runs on a different host than the API; "
+            "set SUPABASE_URL + service key on the worker and ensure uploads mirror to Storage, or colocate API+worker."
+        )
+
+    last_err: Exception | None = None
+    for sp in uniq:
+        try:
+            data = download_file_from_storage(storage_path=sp)
+            path.write_bytes(data)
+            print(f"[worker] Fetched upload from Supabase Storage ({sp}) -> {path}")
+            return str(path)
+        except Exception as e:
+            last_err = e
+    raise FileNotFoundError(
+        f"Video not found locally at {job.video_path} and could not download from Supabase "
+        f"(tried {uniq}): {last_err}"
+    ) from last_err
+
+
 def process_job(job_id: str) -> None:
     ensure_dir(settings.artifacts_dir)
     ensure_dir(settings.results_dir)
@@ -50,7 +104,8 @@ def process_job(job_id: str) -> None:
         update_analysis_status(analysis_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
         sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
 
-        normalize_video(job.video_path, normalized, ffmpeg_bin=settings.ffmpeg_bin)
+        local_video = _ensure_local_upload_file(job)
+        normalize_video(local_video, normalized, ffmpeg_bin=settings.ffmpeg_bin)
         extract_audio_wav(normalized, wav_path, ffmpeg_bin=settings.ffmpeg_bin, sr=16000)
         orch = Orchestrator()
         result = {"job_id": job.id, **orch.run(db, job, normalized_video=normalized, wav_path=wav_path)}
