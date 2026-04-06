@@ -45,8 +45,13 @@ class Settings(BaseSettings):
     # InsightFace: True only with onnxruntime-gpu + working CUDA. False = CPU (typical Windows / no GPU).
     vision_insightface_gpu: bool = False
 
-    # Anthropic (server-side channel AI summaries only)
-    anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY"))
+    # OpenAI (server-side channel AI summaries; FeedbackAgent also reads OPENAI_API_KEY via os.environ)
+    openai_api_key: str = Field(default="", validation_alias=AliasChoices("OPENAI_API_KEY"))
+    openai_base_url: str = Field(default="", validation_alias=AliasChoices("OPENAI_BASE_URL"))
+    openai_channel_summary_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("OPENAI_CHANNEL_SUMMARY_MODEL", "OPENAI_MODEL"),
+    )
 
     # YouTube (for real competitor ingest)
     youtube_api_key: str = ""

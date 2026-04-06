@@ -1,5 +1,5 @@
 """
-Build channel performance payloads and call Anthropic for AI-written summaries.
+Build channel performance payloads and call OpenAI for AI-written summaries.
 """
 from __future__ import annotations
 
@@ -123,12 +123,12 @@ def build_channel_summary_payload(channel_name: str) -> dict[str, Any]:
 
 
 def generate_channel_summary_text(payload: dict[str, Any]) -> str:
-    """Call Anthropic Claude; raises if API key missing or API error."""
-    key = (settings.anthropic_api_key or "").strip()
+    """Call OpenAI Chat Completions; raises if API key missing or API error."""
+    key = (settings.openai_api_key or "").strip()
     if not key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+        raise RuntimeError("OPENAI_API_KEY is not configured")
 
-    import anthropic
+    from openai import OpenAI
 
     system = (
         "You are a professional media coach analyst. Write a concise 3-4 sentence performance summary "
@@ -140,18 +140,18 @@ def generate_channel_summary_text(payload: dict[str, Any]) -> str:
         + json.dumps(payload, indent=2)
     )
 
-    client = anthropic.Anthropic(api_key=key)
-    msg = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    model = (settings.openai_channel_summary_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    base = (settings.openai_base_url or "").strip()
+    client = OpenAI(api_key=key, base_url=base) if base else OpenAI(api_key=key)
+    msg = client.chat.completions.create(
+        model=model,
         max_tokens=1024,
-        system=system,
-        messages=[{"role": "user", "content": user_content}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
     )
-    text = ""
-    for block in msg.content:
-        if hasattr(block, "text"):
-            text += block.text
-    text = (text or "").strip()
+    text = (msg.choices[0].message.content or "").strip()
     if not text:
         raise RuntimeError("Empty response from model")
     return text

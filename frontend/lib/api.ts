@@ -170,7 +170,7 @@ export async function fetchChannelsSummary(): Promise<{ channels: ChannelSummary
 /** Session cache for AI channel summary (same-tab SPA navigation). */
 const channelAiSummaryCache = new Map<string, string>();
 
-/** POST /api/channels/{name}/summary — Anthropic-written paragraph (server-side key only). */
+/** POST /api/channels/{name}/summary — OpenAI-written paragraph (server-side key only). */
 export async function fetchChannelAISummary(
   channelName: string,
   opts?: { force?: boolean }

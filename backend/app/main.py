@@ -1139,7 +1139,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/channels/{channel_name}/summary", response_model=ChannelAISummaryOut)
     def channel_ai_summary_post(channel_name: str) -> ChannelAISummaryOut:
-        """Anthropic-generated channel performance paragraph (server-side API key only)."""
+        """OpenAI-generated channel performance paragraph (server-side API key only)."""
         name = (channel_name or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="channel name is required")
