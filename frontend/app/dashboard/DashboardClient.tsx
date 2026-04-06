@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { getApiBaseUrl } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { deleteChannel, getApiBaseUrl } from "@/lib/api";
 import type { ChannelSummary } from "@/lib/api";
 
 function hashHue(name: string): number {
@@ -40,10 +40,36 @@ function formatRelative(iso: string): string {
   return `${d}d ago`;
 }
 
+function TrashIcon(props: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={props.className}
+      aria-hidden
+    >
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
+    </svg>
+  );
+}
+
 export default function DashboardClient() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
+  const [showEmptyChannels, setShowEmptyChannels] = useState(false);
+  const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -64,28 +90,75 @@ export default function DashboardClient() {
     })();
   }, []);
 
+  const visibleChannels = useMemo(() => {
+    if (showEmptyChannels) return channels;
+    return channels.filter((c) => (c.totalVideos || 0) > 0);
+  }, [channels, showEmptyChannels]);
+
+  const goToChannel = (channelName: string) => {
+    router.push(`/history?channel=${encodeURIComponent(channelName)}`);
+  };
+
   const globals = useMemo(() => {
-    const n = channels.length;
-    const totalVideos = channels.reduce((s, c) => s + (c.totalVideos || 0), 0);
-    const avgConf =
-      n > 0 ? channels.reduce((s, c) => s + (c.avgConfidence || 0), 0) / n : 0;
-    const avgEye =
-      n > 0 ? channels.reduce((s, c) => s + (c.avgEyeContact || 0), 0) / n : 0;
+    const list = visibleChannels;
+    const n = list.length;
+    const totalVideos = list.reduce((s, c) => s + (c.totalVideos || 0), 0);
+    const avgConf = n > 0 ? list.reduce((s, c) => s + (c.avgConfidence || 0), 0) / n : 0;
+    const avgEye = n > 0 ? list.reduce((s, c) => s + (c.avgEyeContact || 0), 0) / n : 0;
     return {
       totalChannels: n,
       totalVideos,
       avgScore: Math.round(avgConf),
       avgEyePct: Math.round((avgEye > 1 ? avgEye / 100 : avgEye) * 100),
     };
-  }, [channels]);
+  }, [visibleChannels]);
+
+  async function handleDeleteChannel(e: React.MouseEvent, ch: ChannelSummary) {
+    e.preventDefault();
+    e.stopPropagation();
+    const ok = window.confirm(
+      `Delete ${ch.name}? This won't delete existing analysis reports.`
+    );
+    if (!ok) return;
+    setDeletingId(ch.id);
+    setCardErrors((prev) => {
+      const next = { ...prev };
+      delete next[ch.id];
+      return next;
+    });
+    try {
+      await deleteChannel(ch.id);
+      setChannels((prev) => prev.filter((c) => c.id !== ch.id));
+    } catch (e: any) {
+      setCardErrors((prev) => ({ ...prev, [ch.id]: e?.message ?? "Delete failed" }));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  const hiddenEmptyCount = channels.filter((c) => (c.totalVideos || 0) === 0).length;
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <div className="font-semibold tracking-tight text-3xl">Dashboard</div>
           <div className="text-slate-300 text-sm">All channels at a glance</div>
         </div>
+        {channels.length > 0 ? (
+          <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none shrink-0">
+            <input
+              type="checkbox"
+              checked={showEmptyChannels}
+              onChange={(e) => setShowEmptyChannels(e.target.checked)}
+              className="rounded border-white/20 bg-white/5 text-cyan-500 focus:ring-cyan-400/40"
+            />
+            Show channels with no videos
+            {hiddenEmptyCount > 0 && !showEmptyChannels ? (
+              <span className="text-slate-500">({hiddenEmptyCount} hidden)</span>
+            ) : null}
+          </label>
+        ) : null}
       </div>
 
       <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -115,21 +188,44 @@ export default function DashboardClient() {
           </div>
         ) : channels.length === 0 ? (
           <div className="text-slate-300 text-sm bg-white/5 border border-white/10 rounded-2xl p-6">No channels yet.</div>
+        ) : visibleChannels.length === 0 ? (
+          <div className="text-slate-300 text-sm bg-white/5 border border-white/10 rounded-2xl p-6">
+            No channels with uploaded analyses. Enable &quot;Show channels with no videos&quot; to see empty channels.
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {channels.map((ch) => {
+            {visibleChannels.map((ch) => {
               const hue = hashHue(ch.name);
-              const href = `/history?channel=${encodeURIComponent(ch.name)}`;
               const processing = ch.processingCount > 0;
               const last = ch.lastAnalyzedAt || "";
               const thumb = ch.thumbnailUrl?.trim() || null;
+              const cardErr = cardErrors[ch.id];
 
               return (
-                <Link
+                <div
                   key={ch.id}
-                  href={href}
-                  className="group block text-left bg-white/5 border border-white/10 backdrop-blur rounded-2xl overflow-hidden hover:border-cyan-400/50 hover:bg-white/[0.07] transition-all"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => goToChannel(ch.name)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      goToChannel(ch.name);
+                    }
+                  }}
+                  className="group relative block cursor-pointer text-left bg-white/5 border border-white/10 backdrop-blur rounded-2xl overflow-hidden hover:border-cyan-400/50 hover:bg-white/[0.07] transition-all outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
                 >
+                  <button
+                    type="button"
+                    title="Delete channel"
+                    aria-label="Delete channel"
+                    disabled={deletingId === ch.id}
+                    className="absolute top-2 right-2 z-20 p-1.5 rounded-md text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                    onClick={(e) => void handleDeleteChannel(e, ch)}
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                  </button>
+
                   <div
                     className="relative h-28 border-b border-white/10 overflow-hidden"
                     style={
@@ -190,8 +286,10 @@ export default function DashboardClient() {
                       <span className="truncate">{last ? new Date(last).toLocaleString() : "—"}</span>
                       <span className="text-cyan-300 group-hover:text-cyan-200 whitespace-nowrap">View channel →</span>
                     </div>
+
+                    {cardErr ? <div className="mt-2 text-xs text-red-400">{cardErr}</div> : null}
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>

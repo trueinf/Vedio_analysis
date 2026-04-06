@@ -1121,7 +1121,8 @@ def create_app() -> FastAPI:
                 db.delete(c)
         db.delete(ch)
         db.commit()
-        return {"ok": True, "deleted_channel_id": channel_id}
+        # Supabase analyses rows are never deleted here (historical data preserved).
+        return {"success": True, "id": channel_id}
 
     @app.get("/api/jobs/{job_id}", response_model=JobCreateResponse)
     def get_job(job_id: str, db: Session = Depends(get_db)) -> JobCreateResponse:

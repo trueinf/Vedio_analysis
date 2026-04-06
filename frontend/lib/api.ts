@@ -406,7 +406,7 @@ export async function renameChannel(channelId: string, name: string): Promise<Ch
   return await res.json();
 }
 
-export async function deleteChannel(channelId: string): Promise<{ ok: boolean; deleted_channel_id: string }> {
+export async function deleteChannel(channelId: string): Promise<{ success: boolean; id: string }> {
   const res = await fetch(`${API_BASE}/api/channels/${channelId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Delete channel failed (${res.status})`);
   return await res.json();
