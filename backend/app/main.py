@@ -38,6 +38,8 @@ from app.schemas import (
     ChannelItemOut,
     ChannelListOut,
     ChannelRenameIn,
+    ChannelSummaryListOut,
+    ChannelSummaryOut,
     CollectionSummaryOut,
     HealthOut,
     JobCreateResponse,
@@ -64,6 +66,7 @@ from app.supabase_repo import (
     upload_file_to_storage,
     put_result_json,
     list_analyses,
+    aggregate_analyses_by_channel_name,
     get_analysis,
     get_result,
     create_comparison_report,
@@ -1014,6 +1017,31 @@ def create_app() -> FastAPI:
                 )
             )
         return ChannelListOut(channels=out)
+
+    @app.get("/api/channels/summary", response_model=ChannelSummaryListOut)
+    def channels_summary(db: Session = Depends(get_db)) -> ChannelSummaryListOut:
+        """Channel deck: SQLite Channel list + aggregated stats from Supabase analyses (by channel_name)."""
+        agg = aggregate_analyses_by_channel_name()
+        channels = list(db.execute(select(Channel).order_by(Channel.created_at.desc())).scalars().all())
+        out: list[ChannelSummaryOut] = []
+        for ch in channels:
+            key = ch.name.strip().lower()
+            a = agg.get(key) or {}
+            out.append(
+                ChannelSummaryOut(
+                    id=ch.id,
+                    name=ch.name,
+                    totalVideos=int(a.get("totalVideos") or 0),
+                    completedCount=int(a.get("completedCount") or 0),
+                    processingCount=int(a.get("processingCount") or 0),
+                    avgConfidence=float(round(float(a.get("avgConfidence") or 0.0), 1)),
+                    avgEnergy=float(round(float(a.get("avgEnergy") or 0.0), 1)),
+                    avgEyeContact=float(round(float(a.get("avgEyeContact") or 0.0), 3)),
+                    lastAnalyzedAt=str(a.get("lastAnalyzedAt") or ""),
+                    thumbnailUrl=a.get("thumbnailUrl"),
+                )
+            )
+        return ChannelSummaryListOut(channels=out)
 
     @app.get("/api/channels/{channel_id}/collections", response_model=ChannelCollectionsOut)
     def channel_collections(channel_id: str, db: Session = Depends(get_db)) -> ChannelCollectionsOut:

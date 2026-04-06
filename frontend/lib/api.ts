@@ -107,6 +107,20 @@ export type JobHistoryItem = {
   has_result: boolean;
 };
 
+/** GET /api/channels/summary — channel deck + aggregated Supabase stats. */
+export type ChannelSummary = {
+  id: string;
+  name: string;
+  totalVideos: number;
+  completedCount: number;
+  processingCount: number;
+  avgConfidence: number;
+  avgEnergy: number;
+  avgEyeContact: number;
+  lastAnalyzedAt: string;
+  thumbnailUrl: string | null;
+};
+
 export type AnalysisRow = {
   id: string;
   /** Backend often returns both id (uuid) and job_id (text). */

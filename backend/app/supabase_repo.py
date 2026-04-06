@@ -5,6 +5,7 @@ import mimetypes
 import uuid
 from datetime import datetime
 from pathlib import Path
+import statistics
 from typing import Any
 
 from app.settings import settings
@@ -307,6 +308,82 @@ def list_analyses(limit: int = 200, *, include_result_json: bool = False) -> lis
             except Exception as e2:
                 print(f"[Supabase] list_analyses fallback FAILED: {e2}")
         return []
+
+
+def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
+    """
+    Group Supabase analyses by channel_name (case-insensitive key).
+    Used for GET /api/channels/summary — no schema changes.
+    """
+    if not _configured():
+        return {}
+    sb = _client()
+    try:
+        res = (
+            sb.table("analyses")
+            .select(
+                "channel_name, status, confidence_score, energy_score, eye_contact_ratio, created_at, thumbnail_url"
+            )
+            .limit(8000)
+            .execute()
+        )
+        rows = list(res.data or [])
+    except Exception as e:
+        print(f"[Supabase] aggregate_analyses_by_channel_name FAILED: {e}")
+        return {}
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    display: dict[str, str] = {}
+    for row in rows:
+        cn = (row.get("channel_name") or "").strip()
+        if not cn:
+            continue
+        key = cn.lower()
+        if key not in buckets:
+            buckets[key] = []
+            display[key] = cn
+        buckets[key].append(row)
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, br in buckets.items():
+        total = len(br)
+        completed_count = sum(1 for r in br if (r.get("status") or "") == "completed")
+        processing_count = sum(1 for r in br if (r.get("status") or "") == "processing")
+        confs = [float(r["confidence_score"]) for r in br if r.get("confidence_score") is not None]
+        engs = [float(r["energy_score"]) for r in br if r.get("energy_score") is not None]
+        eyes = [float(r["eye_contact_ratio"]) for r in br if r.get("eye_contact_ratio") is not None]
+        avg_c = round(float(statistics.mean(confs)), 1) if confs else 0.0
+        avg_e = round(float(statistics.mean(engs)), 1) if engs else 0.0
+        avg_eye = round(float(statistics.mean(eyes)), 3) if eyes else 0.0
+
+        times: list[str] = []
+        for r in br:
+            ca = r.get("created_at")
+            if ca:
+                times.append(str(ca))
+        last_at = max(times) if times else ""
+
+        thumb: str | None = None
+        completed_rows = [r for r in br if (r.get("status") or "") == "completed"]
+        completed_rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        for r in completed_rows:
+            t = (r.get("thumbnail_url") or "").strip()
+            if t:
+                thumb = t
+                break
+
+        out[key] = {
+            "display_name": display.get(key, key),
+            "totalVideos": total,
+            "completedCount": completed_count,
+            "processingCount": processing_count,
+            "avgConfidence": avg_c,
+            "avgEnergy": avg_e,
+            "avgEyeContact": avg_eye,
+            "lastAnalyzedAt": last_at,
+            "thumbnailUrl": thumb,
+        }
+    return out
 
 
 def get_analysis(analysis_id: str) -> dict[str, Any] | None:

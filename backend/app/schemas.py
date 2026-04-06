@@ -120,6 +120,25 @@ class ChannelListOut(BaseModel):
     channels: list[ChannelItemOut]
 
 
+class ChannelSummaryOut(BaseModel):
+    """Dashboard channel deck — stats from Supabase analyses merged with SQLite Channel rows."""
+
+    id: str
+    name: str
+    totalVideos: int = 0
+    completedCount: int = 0
+    processingCount: int = 0
+    avgConfidence: float = 0.0
+    avgEnergy: float = 0.0
+    avgEyeContact: float = 0.0
+    lastAnalyzedAt: str = ""
+    thumbnailUrl: str | None = None
+
+
+class ChannelSummaryListOut(BaseModel):
+    channels: list[ChannelSummaryOut]
+
+
 class ChannelCollectionOut(BaseModel):
     collection_id: str
     title: str

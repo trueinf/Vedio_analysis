@@ -10,12 +10,22 @@ export function StatsBar(props: {
 }) {
   const loading = Boolean(props.loading);
   const err = props.error || "";
+  const scoreDisplay = (() => {
+    const v = Number(props.avgScore);
+    if (!Number.isFinite(v) || v <= 0) return "—";
+    return String(Math.round(v));
+  })();
+  const wpmDisplay = (() => {
+    const v = Number(props.avgWpm);
+    if (!Number.isFinite(v) || v <= 0) return "—";
+    return String(Math.round(v));
+  })();
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {[
         { label: "Total Analyses", value: props.total },
-        { label: "Avg Score", value: props.avgScore },
-        { label: "Avg WPM", value: props.avgWpm },
+        { label: "Avg Score", value: scoreDisplay },
+        { label: "Avg WPM", value: wpmDisplay },
         { label: "Avg Eye Contact", value: `${Math.round((props.avgEyeContact || 0) * 100)}%` },
       ].map((x) => (
         <div key={x.label} className="bg-white/5 border border-white/10 backdrop-blur rounded-xl p-4">
