@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnalysisGrid } from "@/components/AnalysisGrid";
-import { getApiBaseUrl } from "@/lib/api";
+import { listAnalyses } from "@/lib/api";
 import type { AnalysisRow } from "@/lib/api";
 
 function HistoryContent() {
@@ -19,10 +19,7 @@ function HistoryContent() {
       setLoading(true);
       setErr("");
       try {
-        const base = getApiBaseUrl();
-        const listRes = await fetch(`${base}/api/analyses?limit=120`, { cache: "no-store" });
-        if (!listRes.ok) throw new Error(`Failed to load analyses (${listRes.status})`);
-        const listJson = (await listRes.json()) as { analyses: AnalysisRow[] };
+        const listJson = await listAnalyses(120);
         setAnalyses(listJson.analyses || []);
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load history");

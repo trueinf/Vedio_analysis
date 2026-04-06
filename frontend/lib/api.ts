@@ -11,6 +11,34 @@ function getApiBase(): string {
 
 const API_BASE = getApiBase();
 
+/** Default timeout for API reads (Railway cold start + Supabase can exceed a few seconds). */
+const API_FETCH_TIMEOUT_MS = 90_000;
+
+/**
+ * fetch() with an abort timeout so the UI does not spin forever when the API hangs or is unreachable.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init?: RequestInit,
+  timeoutMs: number = API_FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e: unknown) {
+    const name = e && typeof e === "object" && "name" in e ? String((e as { name?: string }).name) : "";
+    if (name === "AbortError") {
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check NEXT_PUBLIC_API_URL, Railway status, and that the backend can reach Supabase.`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 /** Exported for pages that still need a base URL for a one-off fetch. */
 export function getApiBaseUrl(): string {
   return API_BASE;
@@ -155,14 +183,14 @@ export async function listAnalyses(limit = 120, includeResultJson = false): Prom
   const q = new URLSearchParams();
   q.set("limit", String(limit));
   if (includeResultJson) q.set("include_result", "true");
-  const res = await fetch(`${API_BASE}/api/analyses?${q.toString()}`, { cache: "no-store" });
+  const res = await fetchWithTimeout(`${API_BASE}/api/analyses?${q.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Analyses list failed (${res.status})`);
   return await res.json();
 }
 
 /** GET /api/channels/summary — same payload as dashboard. */
 export async function fetchChannelsSummary(): Promise<{ channels: ChannelSummary[] }> {
-  const res = await fetch(`${API_BASE}/api/channels/summary`, { cache: "no-store" });
+  const res = await fetchWithTimeout(`${API_BASE}/api/channels/summary`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Channels summary failed (${res.status})`);
   return await res.json();
 }

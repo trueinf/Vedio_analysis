@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { deleteChannel, getApiBaseUrl, updateChannelName } from "@/lib/api";
+import { deleteChannel, fetchChannelsSummary, updateChannelName } from "@/lib/api";
 import type { ChannelSummary } from "@/lib/api";
 
 function hashHue(name: string): number {
@@ -101,10 +101,7 @@ export default function DashboardClient() {
       setLoading(true);
       setErr("");
       try {
-        const base = getApiBaseUrl();
-        const res = await fetch(`${base}/api/channels/summary`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`Failed to load channels (${res.status})`);
-        const data = (await res.json()) as { channels: ChannelSummary[] };
+        const data = await fetchChannelsSummary();
         setChannels(data.channels || []);
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load dashboard");
