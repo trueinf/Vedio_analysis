@@ -5,8 +5,17 @@ import clsx from "clsx";
 import { Button, Card, premiumSurfaceClass } from "@/components/ui";
 import DarkSelect from "@/components/DarkSelect";
 import { VideoDropzone } from "@/components/VideoDropzone";
-import type { AnalysisDetail, AnalysisRow, JobStatus } from "@/lib/api";
-import { compareAnalyses, getAnalysisDetail, getJobProgressUnified, listAnalyses, uploadVideoFast } from "@/lib/api";
+import type { AnalysisDetail, AnalysisRow, ChannelSummary, JobStatus } from "@/lib/api";
+import {
+  compareAnalyses,
+  fetchChannelsSummary,
+  getAnalysisDetail,
+  getJobProgressUnified,
+  listAnalyses,
+  listAnalysesForChannel,
+  uploadVideoFast,
+} from "@/lib/api";
+import { Line, LineChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type CompareMetric = {
   key: string;
@@ -98,6 +107,291 @@ function computeMetrics(source: any, fresh: any): CompareMetric[] {
   ];
 }
 
+function avgWpmFromRows(rows: AnalysisRow[]): number {
+  const completed = rows.filter((r) => r.status === "completed");
+  const wpms = completed.map((r) => Number(r.wpm)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!wpms.length) return 0;
+  return Math.round(wpms.reduce((a, b) => a + b, 0) / wpms.length);
+}
+
+function eyePctFromSummary(ch: ChannelSummary): number {
+  const e = Number(ch.avgEyeContact);
+  if (!Number.isFinite(e)) return 0;
+  return e <= 1 ? Math.round(e * 100) : Math.round(e);
+}
+
+function pickWinner(a: number, b: number, higherBetter: boolean): "A" | "B" | "tie" {
+  if (a === b) return "tie";
+  if (higherBetter) return a > b ? "A" : "B";
+  return a < b ? "A" : "B";
+}
+
+function mergeConfidencePoints(rowsA: AnalysisRow[], rowsB: AnalysisRow[]) {
+  const map = new Map<number, { a?: number; b?: number }>();
+  for (const r of rowsA) {
+    if (r.status !== "completed" || r.confidence_score == null) continue;
+    const t = new Date(r.created_at).getTime();
+    if (!Number.isFinite(t)) continue;
+    const cur = map.get(t) ?? {};
+    cur.a = Number(r.confidence_score);
+    map.set(t, cur);
+  }
+  for (const r of rowsB) {
+    if (r.status !== "completed" || r.confidence_score == null) continue;
+    const t = new Date(r.created_at).getTime();
+    if (!Number.isFinite(t)) continue;
+    const cur = map.get(t) ?? {};
+    cur.b = Number(r.confidence_score);
+    map.set(t, cur);
+  }
+  const keys = [...map.keys()].sort((x, y) => x - y);
+  return keys.map((t) => ({
+    x: new Date(t).toLocaleDateString(),
+    t,
+    confA: map.get(t)?.a,
+    confB: map.get(t)?.b,
+  }));
+}
+
+function CompareChannelPane() {
+  const [loading, setLoading] = useState(true);
+  const [channels, setChannels] = useState<ChannelSummary[]>([]);
+  const [channelA, setChannelA] = useState("");
+  const [channelB, setChannelB] = useState("");
+  const [rowsA, setRowsA] = useState<AnalysisRow[]>([]);
+  const [rowsB, setRowsB] = useState<AnalysisRow[]>([]);
+  const [loadingAnalyses, setLoadingAnalyses] = useState(false);
+  const [localErr, setLocalErr] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setLocalErr("");
+      try {
+        const data = await fetchChannelsSummary();
+        if (!alive) return;
+        setChannels(data.channels || []);
+      } catch (e: unknown) {
+        if (!alive) return;
+        setLocalErr(e instanceof Error ? e.message : "Failed to load channels");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!channelA || !channelB || channelA === channelB) {
+      setRowsA([]);
+      setRowsB([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      setLoadingAnalyses(true);
+      setLocalErr("");
+      try {
+        const [a, b] = await Promise.all([
+          listAnalysesForChannel(channelA, false),
+          listAnalysesForChannel(channelB, false),
+        ]);
+        if (!alive) return;
+        setRowsA(a.analyses || []);
+        setRowsB(b.analyses || []);
+      } catch (e: unknown) {
+        if (!alive) return;
+        setLocalErr(e instanceof Error ? e.message : "Failed to load channel analyses");
+      } finally {
+        if (alive) setLoadingAnalyses(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [channelA, channelB]);
+
+  const channelOptions = useMemo(
+    () =>
+      channels
+        .filter((c) => (c.totalVideos || 0) > 0)
+        .map((c) => ({ value: c.name, label: c.name })),
+    [channels]
+  );
+
+  const sa = useMemo(() => channels.find((c) => c.name === channelA), [channels, channelA]);
+  const sb = useMemo(() => channels.find((c) => c.name === channelB), [channels, channelB]);
+
+  const metricsTable = useMemo(() => {
+    if (!sa || !sb || channelA === channelB) return null;
+    const wpmA = avgWpmFromRows(rowsA);
+    const wpmB = avgWpmFromRows(rowsB);
+    const confA = Math.round(sa.avgConfidence);
+    const confB = Math.round(sb.avgConfidence);
+    const enA = Math.round(sa.avgEnergy);
+    const enB = Math.round(sb.avgEnergy);
+    const eyeA = eyePctFromSummary(sa);
+    const eyeB = eyePctFromSummary(sb);
+    const tvA = sa.totalVideos;
+    const tvB = sb.totalVideos;
+    const rows = [
+      { key: "conf", label: "Avg Confidence", a: confA, b: confB, higherBetter: true, fmt: "int" as const },
+      { key: "en", label: "Avg Energy", a: enA, b: enB, higherBetter: true, fmt: "int" as const },
+      { key: "wpm", label: "Avg WPM", a: wpmA, b: wpmB, higherBetter: true, fmt: "int" as const },
+      { key: "tv", label: "Total Videos", a: tvA, b: tvB, higherBetter: true, fmt: "int" as const },
+      { key: "eye", label: "Eye Contact", a: eyeA, b: eyeB, higherBetter: true, fmt: "pct" as const },
+    ];
+    return rows.map((r) => ({
+      ...r,
+      winner: pickWinner(r.a, r.b, r.higherBetter),
+    }));
+  }, [sa, sb, rowsA, rowsB, channelA, channelB]);
+
+  const overall = useMemo(() => {
+    if (!metricsTable) return null;
+    let aW = 0;
+    let bW = 0;
+    for (const m of metricsTable) {
+      if (m.winner === "A") aW += 1;
+      else if (m.winner === "B") bW += 1;
+    }
+    if (aW === bW) return { kind: "tie" as const, aW, bW };
+    return { kind: aW > bW ? ("A" as const) : ("B" as const), aW, bW };
+  }, [metricsTable]);
+
+  const chartData = useMemo(() => mergeConfidencePoints(rowsA, rowsB), [rowsA, rowsB]);
+
+  const nameA = sa?.name ?? "Channel A";
+  const nameB = sb?.name ?? "Channel B";
+
+  return (
+    <div className="mt-6 space-y-6">
+      {localErr ? <div className="text-red-300 text-sm">{localErr}</div> : null}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
+          <div className="text-sm font-semibold">Channel A</div>
+          <div className="mt-3">
+            <DarkSelect
+              value={channelA}
+              onChange={setChannelA}
+              options={channelOptions}
+              disabled={loading}
+              emptyLabel={loading ? "Loading…" : "No channels with videos"}
+              placeholder="Choose channel…"
+            />
+          </div>
+        </Card>
+        <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
+          <div className="text-sm font-semibold">Channel B</div>
+          <div className="mt-3">
+            <DarkSelect
+              value={channelB}
+              onChange={setChannelB}
+              options={channelOptions}
+              disabled={loading}
+              emptyLabel={loading ? "Loading…" : "No channels with videos"}
+              placeholder="Choose channel…"
+            />
+          </div>
+        </Card>
+      </div>
+
+      {channelA && channelB && channelA === channelB ? (
+        <div className="text-amber-200/90 text-sm">Pick two different channels to compare.</div>
+      ) : null}
+
+      {loadingAnalyses && channelA && channelB && channelA !== channelB ? (
+        <div className="text-slate-400 text-sm">Loading channel data…</div>
+      ) : null}
+
+      {metricsTable && sa && sb ? (
+        <>
+          <Card className={`p-5 rounded-2xl overflow-x-auto ${premiumSurfaceClass}`}>
+            <div className="text-sm font-semibold mb-4">Comparison</div>
+            <table className="w-full text-sm min-w-[520px]">
+              <thead>
+                <tr className="text-left text-slate-400 border-b border-white/10">
+                  <th className="pb-2 pr-3">Metric</th>
+                  <th className="pb-2 pr-3">{nameA}</th>
+                  <th className="pb-2 pr-3">{nameB}</th>
+                  <th className="pb-2">Winner</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metricsTable.map((m) => (
+                  <tr key={m.key} className="border-b border-white/5">
+                    <td className="py-2 pr-3 text-slate-300">{m.label}</td>
+                    <td
+                      className={clsx(
+                        "py-2 pr-3 tabular-nums",
+                        m.winner === "A" ? "text-emerald-300 font-medium" : m.winner === "B" ? "text-amber-200/90" : "text-slate-200"
+                      )}
+                    >
+                      {m.fmt === "pct" ? `${m.a}%` : m.a}
+                    </td>
+                    <td
+                      className={clsx(
+                        "py-2 pr-3 tabular-nums",
+                        m.winner === "B" ? "text-emerald-300 font-medium" : m.winner === "A" ? "text-amber-200/90" : "text-slate-200"
+                      )}
+                    >
+                      {m.fmt === "pct" ? `${m.b}%` : m.b}
+                    </td>
+                    <td className="py-2 text-slate-200">
+                      {m.winner === "tie" ? "—" : m.winner === "A" ? "← A" : "← B"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+
+          {overall ? (
+            <div
+              className={clsx(
+                "rounded-2xl border px-4 py-3 text-sm font-medium",
+                overall.kind === "tie"
+                  ? "border-white/15 bg-white/5 text-slate-200"
+                  : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+              )}
+            >
+              {overall.kind === "tie"
+                ? `Overall: tied (${overall.aW} metrics each)`
+                : `Overall: ${overall.kind === "A" ? nameA : nameB} leads (${overall.kind === "A" ? overall.aW : overall.bW} vs ${overall.kind === "A" ? overall.bW : overall.aW} metrics)`}
+            </div>
+          ) : null}
+
+          {chartData.length > 0 ? (
+            <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
+              <div className="text-sm font-semibold">Confidence over time</div>
+              <div className="mt-4 h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData}>
+                    <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                    <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                    <Tooltip
+                      contentStyle={{ background: "rgba(2,6,23,0.92)", border: "1px solid rgba(255,255,255,0.1)" }}
+                    />
+                    <Legend />
+                    <Line type="monotone" dataKey="confA" name={nameA} stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
+                    <Line type="monotone" dataKey="confB" name={nameB} stroke="#f472b6" strokeWidth={2} dot={false} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          ) : (
+            <div className="text-slate-500 text-sm">No confidence scores yet to plot trends.</div>
+          )}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ComparePage() {
   const [loadingList, setLoadingList] = useState(true);
   const [err, setErr] = useState("");
@@ -110,6 +404,7 @@ export default function ComparePage() {
   // RIGHT: New video upload
   const [files, setFiles] = useState<File[]>([]);
   const [channelName, setChannelName] = useState("");
+  const [compareMode, setCompareMode] = useState<"video" | "channel">("video");
   const [newJobId, setNewJobId] = useState<string>("");
   const [newStatus, setNewStatus] = useState<JobStatus | "">("");
   const [newStage, setNewStage] = useState<string>("");
@@ -319,9 +614,44 @@ export default function ComparePage() {
     <div className="max-w-7xl mx-auto px-6 py-8">
       <div>
         <div className="font-semibold tracking-tight text-3xl">Compare</div>
-        <div className="text-slate-300 text-sm mt-1">Compare a completed analysis against a fresh upload</div>
+        <div className="text-slate-300 text-sm mt-1">
+          {compareMode === "video"
+            ? "Compare a completed analysis against a fresh upload"
+            : "Compare aggregate performance between two channels"}
+        </div>
       </div>
 
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setCompareMode("video")}
+          className={clsx(
+            "px-4 py-2 rounded-xl text-sm border transition-all",
+            compareMode === "video"
+              ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
+              : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+          )}
+        >
+          Video vs Video
+        </button>
+        <button
+          type="button"
+          onClick={() => setCompareMode("channel")}
+          className={clsx(
+            "px-4 py-2 rounded-xl text-sm border transition-all",
+            compareMode === "channel"
+              ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
+              : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+          )}
+        >
+          Channel vs Channel
+        </button>
+      </div>
+
+      {compareMode === "channel" ? (
+        <CompareChannelPane />
+      ) : (
+        <>
       {err ? <div className="mt-4 text-red-300 text-sm">{err}</div> : null}
 
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -598,6 +928,8 @@ export default function ComparePage() {
             : "Waiting for analysis to complete..."}
         </div>
       ) : null}
+        </>
+      )}
     </div>
   );
 }

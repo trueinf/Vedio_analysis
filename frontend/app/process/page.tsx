@@ -2,8 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "../../components/ui";
-import { VideoUploadPanel } from "../../components/VideoUploadPanel";
-import { createJobFromYouTubeUrl, getJobProgressUnified, uploadVideo } from "../../lib/api";
+import { isValidYouTubeVideoUrl, VideoUploadPanel } from "../../components/VideoUploadPanel";
+import {
+  createYouTubeJobWithChannel,
+  getJobProgressUnified,
+  listChannels,
+  uploadVideo,
+} from "../../lib/api";
+import type { ChannelItem } from "../../lib/api";
 import { getApiBaseUrl } from "../../lib/api";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -73,6 +79,10 @@ export default function ProcessPage() {
 
   const [channelName, setChannelName] = useState<string>("");
   const [youtubeUrl, setYoutubeUrl] = useState<string>("");
+  const [uploadMode, setUploadMode] = useState<"file" | "youtube">("file");
+  const [channelId, setChannelId] = useState<string>("");
+  const [channelList, setChannelList] = useState<ChannelItem[]>([]);
+  const [youtubeFieldError, setYoutubeFieldError] = useState<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -88,6 +98,16 @@ export default function ProcessPage() {
       if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
     };
   }, [localVideoUrl]);
+
+  useEffect(() => {
+    void listChannels()
+      .then((d) => setChannelList(d.channels || []))
+      .catch(() => setChannelList([]));
+  }, []);
+
+  useEffect(() => {
+    if (uploadMode === "file") setYoutubeFieldError("");
+  }, [uploadMode]);
 
   const refreshSelected = useCallback(async () => {
     if (!jobId) return;
@@ -172,6 +192,14 @@ export default function ProcessPage() {
     };
   }, [uploadedJobs, jobId, busy]);
 
+  const canAnalyze = useMemo(() => {
+    if (busy) return false;
+    if (uploadMode === "file") {
+      return Boolean(file || files.length > 0);
+    }
+    return Boolean(youtubeUrl.trim() && channelId);
+  }, [busy, uploadMode, file, files.length, youtubeUrl, channelId]);
+
   async function startUpload() {
     // Extra guard: in dev it’s easy to trigger the handler twice (double-click / key repeat)
     // before React state updates disable the button.
@@ -179,18 +207,33 @@ export default function ProcessPage() {
     uploadInFlightRef.current = true;
     const yt = youtubeUrl.trim();
     const batch = files.length ? files : file ? [file] : [];
-    if (!batch.length && !yt) return;
+    if (uploadMode === "youtube") {
+      if (!channelId) {
+        setJobError("Select a channel.");
+        uploadInFlightRef.current = false;
+        return;
+      }
+      if (!yt) {
+        uploadInFlightRef.current = false;
+        return;
+      }
+      if (!isValidYouTubeVideoUrl(yt)) {
+        setYoutubeFieldError("Enter a valid YouTube video URL (watch?v=, youtu.be, or /shorts/).");
+        uploadInFlightRef.current = false;
+        return;
+      }
+    } else if (!batch.length) {
+      uploadInFlightRef.current = false;
+      return;
+    }
     setBusy(true);
     setJobError("");
+    setYoutubeFieldError("");
     try {
       const newRows: UploadJobRow[] = [];
-      if (yt) {
-        if (isYouTubeChannelLink(yt)) {
-          setJobError("Channel ingest is available in the main dashboard comparison panel. Paste a YouTube *video* URL here.");
-          return;
-        }
-        const u = await createJobFromYouTubeUrl(yt);
-        newRows.push({ id: u.job_id, name: "YouTube URL", status: u.status, stage: "queued", progress: 0 });
+      if (uploadMode === "youtube") {
+        const u = await createYouTubeJobWithChannel(yt, channelId);
+        newRows.push({ id: u.job_id, name: "YouTube video", status: u.status, stage: "queued", progress: 0 });
       } else if (batch.length > 1) {
         const signedMax = supabaseSignedUploadMaxBytes();
         const needsSigned = batch.some((f) => f.size <= signedMax);
@@ -248,7 +291,7 @@ export default function ProcessPage() {
           );
           newRows.push({ id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 });
         }
-      } else {
+      } else if (batch.length === 1) {
         const u = await uploadVideo(batch[0], channelName);
         newRows.push({ id: u.job_id, name: batch[0].name, status: u.status, stage: "queued", progress: 0 });
       }
@@ -297,6 +340,21 @@ export default function ProcessPage() {
               onYoutubeUrlChange={setYoutubeUrl}
               ytIngest={null}
               ytIngesting={false}
+              uploadMode={uploadMode}
+              onUploadModeChange={(m) => {
+                setUploadMode(m);
+                if (m === "file") {
+                  setYoutubeUrl("");
+                  setYoutubeFieldError("");
+                } else {
+                  setFiles([]);
+                  setFile(null);
+                }
+              }}
+              channels={channelList.map((c) => ({ id: c.id, name: c.name }))}
+              channelId={channelId}
+              onChannelIdChange={setChannelId}
+              youtubeFieldError={youtubeFieldError}
               onPickFiles={(picked) => {
                 setFiles(picked);
                 setFile(picked[0] ?? null);
@@ -304,7 +362,7 @@ export default function ProcessPage() {
               onAnalyze={startUpload}
               onRefresh={refreshSelected}
               onClearHistory={clearHistory}
-              canAnalyze={(Boolean(file) || Boolean(youtubeUrl.trim()) || files.length > 0) && !busy}
+              canAnalyze={canAnalyze}
               canRefresh={Boolean(jobId) && !busy}
               selectedFilesCount={files.length}
               status={status}

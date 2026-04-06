@@ -116,6 +116,8 @@ def upsert_analysis_row(
     stage: str,
     progress: float,
     error_message: str = "",
+    channel_name: str = "",
+    thumbnail_url: str = "",
 ) -> None:
     if not _configured():
         return
@@ -137,6 +139,12 @@ def upsert_analysis_row(
         "progress": float(progress or 0.0),
         "error_message": error_message or "",
     }
+    cn = (channel_name or "").strip()
+    if cn:
+        payload["channel_name"] = cn
+    tu = (thumbnail_url or "").strip()
+    if tu:
+        payload["thumbnail_url"] = tu
     try:
         # Conflict on job_id (unique) — avoids duplicate key on analyses_job_id_key vs id-only upsert.
         sb.table("analyses").upsert(payload, on_conflict="job_id").execute()
@@ -310,6 +318,72 @@ def list_analyses(limit: int = 200, *, include_result_json: bool = False) -> lis
         return []
 
 
+def _escape_ilike_exact(value: str) -> str:
+    """Escape % and _ so ILIKE treats them as literals (exact match, case-insensitive)."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def list_analyses_by_channel(channel_name: str, *, include_result_json: bool = True) -> list[dict[str, Any]]:
+    """
+    All analyses for a channel_name match (case-insensitive, trimmed), oldest first.
+    Used for channel report trends and channel-vs-channel compare.
+    """
+    if not _configured():
+        return []
+    sb = _client()
+    cn = (channel_name or "").strip()
+    if not cn:
+        return []
+    sel = "*" if include_result_json else _LIST_ANALYSES_COLUMNS_NO_RESULT
+    lim = 10_000
+    pattern = _escape_ilike_exact(cn)
+    try:
+        res = (
+            sb.table("analyses")
+            .select(sel)
+            .ilike("channel_name", pattern)
+            .order("created_at", desc=False)
+            .limit(lim)
+            .execute()
+        )
+        rows = list(res.data or [])
+        # If DB stores different casing only, ilike exact pattern still matches; if ilike failed silently, filter:
+        if not rows:
+            key = cn.lower()
+            res2 = (
+                sb.table("analyses")
+                .select(sel)
+                .order("created_at", desc=False)
+                .limit(min(lim, 5000))
+                .execute()
+            )
+            rows = [
+                r
+                for r in (res2.data or [])
+                if (str(r.get("channel_name") or "").strip().lower() == key)
+            ]
+        return rows
+    except Exception as e:
+        print(f"[Supabase] list_analyses_by_channel FAILED: {e}")
+        try:
+            res = (
+                sb.table("analyses")
+                .select(sel)
+                .order("created_at", desc=False)
+                .limit(5000)
+                .execute()
+            )
+            key = cn.lower()
+            return [
+                r
+                for r in (res.data or [])
+                if (str(r.get("channel_name") or "").strip().lower() == key)
+            ]
+        except Exception as e2:
+            print(f"[Supabase] list_analyses_by_channel fallback FAILED: {e2}")
+            return []
+
+
 def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
     """
     Group Supabase analyses by channel_name (case-insensitive key).
@@ -372,6 +446,23 @@ def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
                 thumb = t
                 break
 
+        # Latest 5 vs previous 5 completed videos (by created_at desc) with confidence scores — trend inputs
+        conf_series = [
+            r
+            for r in completed_rows
+            if r.get("confidence_score") is not None and str(r.get("confidence_score")).strip() != ""
+        ]
+        latest_5 = conf_series[:5]
+        previous_5 = conf_series[5:10]
+        recent_conf_vals = [float(r["confidence_score"]) for r in latest_5]
+        prev_conf_vals = [float(r["confidence_score"]) for r in previous_5]
+        recent_avg_confidence: float | None = None
+        previous_avg_confidence: float | None = None
+        if recent_conf_vals:
+            recent_avg_confidence = round(float(statistics.mean(recent_conf_vals)), 1)
+        if len(prev_conf_vals) >= 5:
+            previous_avg_confidence = round(float(statistics.mean(prev_conf_vals)), 1)
+
         out[key] = {
             "display_name": display.get(key, key),
             "totalVideos": total,
@@ -382,6 +473,8 @@ def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
             "avgEyeContact": avg_eye,
             "lastAnalyzedAt": last_at,
             "thumbnailUrl": thumb,
+            "recentAvgConfidence": recent_avg_confidence,
+            "previousAvgConfidence": previous_avg_confidence,
         }
     return out
 

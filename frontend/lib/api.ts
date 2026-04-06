@@ -119,6 +119,10 @@ export type ChannelSummary = {
   avgEyeContact: number;
   lastAnalyzedAt: string;
   thumbnailUrl: string | null;
+  /** Avg confidence of latest 5 completed videos (newest first). */
+  recentAvgConfidence?: number | null;
+  /** Avg confidence of videos 6–10; null if fewer than 5 older videos. */
+  previousAvgConfidence?: number | null;
 };
 
 export type AnalysisRow = {
@@ -143,6 +147,7 @@ export type AnalysisRow = {
   energy_score?: number;
   wpm?: number;
   eye_contact_ratio?: number;
+  thumbnail_url?: string;
   result_json?: Record<string, unknown> | null;
 };
 
@@ -152,6 +157,61 @@ export async function listAnalyses(limit = 120, includeResultJson = false): Prom
   if (includeResultJson) q.set("include_result", "true");
   const res = await fetch(`${API_BASE}/api/analyses?${q.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Analyses list failed (${res.status})`);
+  return await res.json();
+}
+
+/** GET /api/channels/summary — same payload as dashboard. */
+export async function fetchChannelsSummary(): Promise<{ channels: ChannelSummary[] }> {
+  const res = await fetch(`${API_BASE}/api/channels/summary`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Channels summary failed (${res.status})`);
+  return await res.json();
+}
+
+/** Session cache for AI channel summary (same-tab SPA navigation). */
+const channelAiSummaryCache = new Map<string, string>();
+
+/** POST /api/channels/{name}/summary — Anthropic-written paragraph (server-side key only). */
+export async function fetchChannelAISummary(
+  channelName: string,
+  opts?: { force?: boolean }
+): Promise<{ summary: string }> {
+  const k = channelName.trim().toLowerCase();
+  if (!opts?.force) {
+    const hit = channelAiSummaryCache.get(k);
+    if (hit != null) return { summary: hit };
+  }
+  const enc = encodeURIComponent(channelName.trim());
+  const res = await fetch(`${API_BASE}/api/channels/${enc}/summary`, { method: "POST" });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const data = (await res.json()) as { detail?: string };
+      if (typeof data.detail === "string") detail = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || `Channel AI summary failed (${res.status})`);
+  }
+  const data = (await res.json()) as { summary: string };
+  if (data.summary) channelAiSummaryCache.set(k, data.summary);
+  return data;
+}
+
+export function clearChannelAISummaryCache(channelName: string): void {
+  channelAiSummaryCache.delete(channelName.trim().toLowerCase());
+}
+
+/** GET /api/channels/{name}/analyses — all rows for channel, oldest first. */
+export async function listAnalysesForChannel(
+  channelName: string,
+  includeResultJson = true
+): Promise<{ analyses: AnalysisRow[] }> {
+  const enc = encodeURIComponent(channelName);
+  const q = new URLSearchParams();
+  if (includeResultJson) q.set("include_result", "true");
+  const qs = q.toString();
+  const res = await fetch(`${API_BASE}/api/channels/${enc}/analyses${qs ? `?${qs}` : ""}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Channel analyses failed (${res.status})`);
   return await res.json();
 }
 
@@ -347,6 +407,10 @@ export async function compareAnalyses(leftAnalysisId: string, rightAnalysisId: s
   return await res.json();
 }
 
+/**
+ * Single POST with all files — can exceed reverse-proxy timeouts for many/large videos (502).
+ * Prefer looping {@link uploadVideo} per file (home page and /process use that pattern).
+ */
 export async function uploadVideos(
   files: File[],
   channelName = "",
@@ -378,6 +442,29 @@ export async function createJobFromYouTubeUrl(url: string): Promise<{ job_id: st
   return await res.json();
 }
 
+/** POST /api/jobs/youtube — YouTube video URL + existing SQLite channel. */
+export async function createYouTubeJobWithChannel(
+  youtubeUrl: string,
+  channelId: string
+): Promise<{ job_id: string; status: JobStatus }> {
+  const res = await fetch(`${API_BASE}/api/jobs/youtube`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ youtube_url: youtubeUrl, channel_id: channelId }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const data = (await res.json()) as { detail?: string };
+      if (typeof data.detail === "string") detail = data.detail;
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || `YouTube job failed (${res.status})`);
+  }
+  return await res.json();
+}
+
 export async function getCollectionSummary(collectionId: string): Promise<any> {
   const res = await fetch(`${API_BASE}/api/collections/${collectionId}/summary`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Collection summary failed (${res.status})`);
@@ -396,14 +483,27 @@ export async function getChannelCollections(channelId: string): Promise<{ channe
   return await res.json();
 }
 
-export async function renameChannel(channelId: string, name: string): Promise<ChannelItem> {
+/** PATCH /api/channels/{id} — updates SQLite display name only (Supabase analyses unchanged). */
+export type ChannelRenameResult = { success: true; channel: { id: string; name: string } };
+
+export async function updateChannelName(channelId: string, name: string): Promise<ChannelRenameResult> {
   const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error(`Rename channel failed (${res.status})`);
-  return await res.json();
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const data = (await res.json()) as { detail?: string | { msg?: string }[] };
+      if (typeof data.detail === "string") detail = data.detail;
+      else if (Array.isArray(data.detail)) detail = data.detail.map((x) => (typeof x === "object" && x && "msg" in x ? String((x as { msg?: string }).msg) : "")).filter(Boolean).join(", ");
+    } catch {
+      // ignore
+    }
+    throw new Error(detail || `Rename channel failed (${res.status})`);
+  }
+  return (await res.json()) as ChannelRenameResult;
 }
 
 export async function deleteChannel(channelId: string): Promise<{ success: boolean; id: string }> {

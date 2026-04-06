@@ -1,5 +1,6 @@
 "use client";
 
+import clsx from "clsx";
 import { Button, Card, PremiumField } from "./ui";
 
 export type UploadJobListItem = {
@@ -9,6 +10,10 @@ export type UploadJobListItem = {
   stage: string;
   progress: number;
 };
+
+export function isValidYouTubeVideoUrl(input: string): boolean {
+  return Boolean(getYouTubeVideoId(input));
+}
 
 function getYouTubeVideoId(input: string): string | null {
   const raw = (input || "").trim();
@@ -60,7 +65,19 @@ export function VideoUploadPanel(props: {
   setVideoRef: (el: HTMLVideoElement | null) => void;
   onVideoLoadedMetadata: (duration: number) => void;
   onVideoTimeUpdate: (time: number) => void;
+  /** When set, show Upload / YouTube tabs and optional channel picker for YouTube mode. */
+  uploadMode?: "file" | "youtube";
+  onUploadModeChange?: (m: "file" | "youtube") => void;
+  channels?: { id: string; name: string }[];
+  channelId?: string;
+  onChannelIdChange?: (id: string) => void;
+  youtubeFieldError?: string;
 }) {
+  const uploadMode = props.uploadMode ?? "file";
+  const onUploadModeChange = props.onUploadModeChange ?? (() => {});
+  const channels = props.channels ?? [];
+  const channelId = props.channelId ?? "";
+  const onChannelIdChange = props.onChannelIdChange ?? (() => {});
   const ytId = getYouTubeVideoId(props.youtubeUrl);
   const ytEmbedSrc = ytId
     ? `https://www.youtube.com/embed/${ytId}?autoplay=0&rel=0&modestbranding=1&playsinline=1`
@@ -70,10 +87,38 @@ export function VideoUploadPanel(props: {
       id="demo-problem"
       className={`col-span-12 lg:col-span-6 p-4 h-full transition-all duration-500 bg-white/5 border border-white/10 backdrop-blur text-white`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="text-sm font-semibold">Video</div>
         {props.jobId ? <div className="text-xs text-slate-300">Job: {props.jobId}</div> : null}
       </div>
+      {props.uploadMode != null ? (
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={() => onUploadModeChange("file")}
+            className={clsx(
+              "px-3 py-1.5 rounded-lg text-xs border transition-colors",
+              uploadMode === "file"
+                ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
+                : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+            )}
+          >
+            Upload file
+          </button>
+          <button
+            type="button"
+            onClick={() => onUploadModeChange("youtube")}
+            className={clsx(
+              "px-3 py-1.5 rounded-lg text-xs border transition-colors",
+              uploadMode === "youtube"
+                ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
+                : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+            )}
+          >
+            YouTube URL
+          </button>
+        </div>
+      ) : null}
       <div className="mt-3 border border-white/10 rounded-xl overflow-hidden bg-black/30 aspect-video flex items-center justify-center text-slate-300 text-sm">
         {props.localVideoUrl ? (
           <video
@@ -98,23 +143,65 @@ export function VideoUploadPanel(props: {
         )}
       </div>
       <div className={`mt-4 flex items-center gap-3 flex-wrap ${props.demoMode ? "hidden" : ""}`}>
-        <PremiumField
-          value={props.channelName}
-          onChange={props.onChannelNameChange}
-          placeholder="Channel name (e.g. ifan)"
-        />
-        <PremiumField
-          value={props.youtubeUrl}
-          onChange={props.onYoutubeUrlChange}
-          placeholder="Or paste YouTube link (https://www.youtube.com/watch?v=...)"
-        />
-        <input
-          type="file"
-          accept="video/*"
-          multiple
-          onChange={(e) => props.onPickFiles(Array.from(e.target.files ?? []))}
-          className="text-sm text-slate-200 file:mr-2 file:px-3 file:py-1 file:rounded-md file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/15"
-        />
+        {props.uploadMode == null ? (
+          <>
+            <PremiumField
+              value={props.channelName}
+              onChange={props.onChannelNameChange}
+              placeholder="Channel name (e.g. ifan)"
+            />
+            <PremiumField
+              value={props.youtubeUrl}
+              onChange={props.onYoutubeUrlChange}
+              placeholder="Or paste YouTube link (https://www.youtube.com/watch?v=...)"
+            />
+            <input
+              type="file"
+              accept="video/*"
+              multiple
+              onChange={(e) => props.onPickFiles(Array.from(e.target.files ?? []))}
+              className="text-sm text-slate-200 file:mr-2 file:px-3 file:py-1 file:rounded-md file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/15"
+            />
+          </>
+        ) : uploadMode === "file" ? (
+          <>
+            <PremiumField
+              value={props.channelName}
+              onChange={props.onChannelNameChange}
+              placeholder="Channel name (e.g. ifan)"
+            />
+            <input
+              type="file"
+              accept="video/*"
+              multiple
+              onChange={(e) => props.onPickFiles(Array.from(e.target.files ?? []))}
+              className="text-sm text-slate-200 file:mr-2 file:px-3 file:py-1 file:rounded-md file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/15"
+            />
+          </>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1 min-w-[200px] flex-1">
+              <label className="text-[11px] text-slate-400">Channel</label>
+              <select
+                value={channelId}
+                onChange={(e) => onChannelIdChange(e.target.value)}
+                className="bg-white/5 border border-white/15 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-400/50"
+              >
+                <option value="">Select channel…</option>
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <PremiumField
+              value={props.youtubeUrl}
+              onChange={props.onYoutubeUrlChange}
+              placeholder="Paste YouTube URL (watch?v=, youtu.be, or /shorts/)"
+            />
+          </>
+        )}
         <Button variant="premium" onClick={props.onAnalyze} disabled={!props.canAnalyze}>
           Analyze
         </Button>
@@ -122,7 +209,11 @@ export function VideoUploadPanel(props: {
           Refresh
         </Button>
         <div className="text-xs text-slate-300">
-          {props.selectedFilesCount ? `${props.selectedFilesCount} videos selected` : "Select one or more videos"}
+          {uploadMode === "youtube" && props.uploadMode != null
+            ? "Paste a video link and pick a channel"
+            : props.selectedFilesCount
+              ? `${props.selectedFilesCount} videos selected`
+              : "Select one or more videos"}
         </div>
         <div className="text-sm text-slate-300">
           Status: <span className="font-medium text-white">{props.status || "-"}</span>
@@ -133,6 +224,10 @@ export function VideoUploadPanel(props: {
             {props.progress ? <span className="text-slate-400">({Math.round(props.progress * 100)}%)</span> : null}
           </div>
         ) : null}
+        {props.stage === "downloading" ? (
+          <div className="text-xs text-amber-200/90">Downloading video from YouTube… this can take a minute.</div>
+        ) : null}
+        {props.youtubeFieldError ? <div className="text-sm text-red-300">{props.youtubeFieldError}</div> : null}
         {props.jobError ? <div className="text-sm text-bad">{props.jobError}</div> : null}
       </div>
 

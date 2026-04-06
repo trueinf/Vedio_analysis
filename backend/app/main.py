@@ -38,6 +38,9 @@ from app.schemas import (
     ChannelItemOut,
     ChannelListOut,
     ChannelRenameIn,
+    ChannelRenameSuccessOut,
+    ChannelIdNameOut,
+    ChannelAISummaryOut,
     ChannelSummaryListOut,
     ChannelSummaryOut,
     CollectionSummaryOut,
@@ -52,6 +55,7 @@ from app.schemas import (
     YouTubeIngestCreateOut,
     YouTubeIngestStatusOut,
     YouTubeJobIn,
+    YouTubeChannelJobIn,
     SupabaseStorageJobIn,
     FastUploadResponse,
     UploadRegisterIn,
@@ -66,6 +70,7 @@ from app.supabase_repo import (
     upload_file_to_storage,
     put_result_json,
     list_analyses,
+    list_analyses_by_channel,
     aggregate_analyses_by_channel_name,
     get_analysis,
     get_result,
@@ -76,6 +81,7 @@ from app.supabase_repo import (
 )
 from app.services.file_service import build_local_upload_path
 from app.youtube_service import normalize_channel_handle
+from app.channel_summary_ai import build_channel_summary_payload, generate_channel_summary_text
 
 
 def _suggest_channel_name(filenames: list[str]) -> tuple[str, str]:
@@ -398,6 +404,7 @@ def create_app() -> FastAPI:
         origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
         for extra in (
             "https://vedioanalysis.netlify.app",
+            "https://videoanalysis.netlify.app",
             "http://localhost:3000",
             "http://127.0.0.1:3000",
         ):
@@ -587,8 +594,93 @@ def create_app() -> FastAPI:
             pass
 
         # Download async (then enqueue normal pipeline)
-        enqueue_task("app.youtube_url_tasks.download_then_enqueue", job_id, url)
+        enqueue_task("app.youtube_url_tasks.download_then_enqueue", job_id, url, "")
         return UploadResponse(job_id=job_id, status=job.status.value, message="youtube url queued")
+
+    @app.post("/api/jobs/youtube", response_model=UploadResponse)
+    def create_youtube_job_with_channel(payload: YouTubeChannelJobIn, db: Session = Depends(get_db)) -> UploadResponse:
+        """
+        YouTube video URL tied to an existing SQLite channel (collection + job).
+        Download runs in background (same pipeline as /api/jobs/from-youtube).
+        """
+        url = (payload.youtube_url or "").strip()
+        cid = (payload.channel_id or "").strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="youtube_url is required")
+        if not cid:
+            raise HTTPException(status_code=400, detail="channel_id is required")
+        low = url.lower()
+        if ("youtube.com/@" in low) or low.rstrip("/").endswith("/@") or low.startswith("@") or ("/channel/" in low) or ("/c/" in low):
+            raise HTTPException(
+                status_code=400,
+                detail="This looks like a channel link/handle. Paste a single video URL.",
+            )
+        if ("watch?v=" not in low) and ("youtu.be/" not in low) and ("/shorts/" not in low):
+            raise HTTPException(status_code=400, detail="Please paste a YouTube video URL (watch?v=..., youtu.be/..., or /shorts/...)")
+
+        ch = db.get(Channel, cid)
+        if not ch:
+            raise HTTPException(status_code=404, detail="channel not found")
+
+        job_id = str(uuid.uuid4())
+        dest_dir = Path(settings.uploads_dir) / "youtube-urls"
+        ensure_dir(dest_dir)
+        dest = dest_dir / f"{job_id}.mp4"
+
+        collection_id = str(uuid.uuid4())
+        coll = Collection(
+            id=collection_id,
+            created_at=datetime.utcnow(),
+            channel_id=ch.id,
+            title=f"{ch.name} YouTube",
+        )
+        db.add(coll)
+        db.commit()
+
+        now = datetime.utcnow()
+        job = Job(
+            id=job_id,
+            created_at=now,
+            updated_at=now,
+            status=JobStatus.queued,
+            original_filename=f"youtube_url:{url[:220]}",
+            video_path=str(dest),
+            collection_id=collection_id,
+            duration_sec=0,
+            stage="queued",
+            progress=0.0,
+            error_message="",
+            result_path="",
+        )
+        db.add(job)
+        db.commit()
+        try:
+            upsert_analysis_row(
+                analysis_id=job_id,
+                source_type="youtube_url",
+                source_url=url,
+                title="YouTube URL",
+                video_storage_path="",
+                duration_sec=0,
+                status="queued",
+                stage="queued",
+                progress=0.0,
+                channel_name=ch.name,
+            )
+        except Exception:
+            pass
+
+        enqueue_task("app.youtube_url_tasks.download_then_enqueue", job_id, url, ch.name)
+        return UploadResponse(
+            job_id=job_id,
+            status=job.status.value,
+            collection_id=collection_id,
+            channel_id=ch.id,
+            channel_name=ch.name,
+            suggested_channel_name="",
+            suggestion_confidence="low",
+            message="youtube url queued",
+        )
 
     @app.post("/api/jobs/from-supabase", response_model=UploadResponse)
     def create_job_from_supabase(payload: SupabaseStorageJobIn, db: Session = Depends(get_db)) -> UploadResponse:
@@ -1039,9 +1131,39 @@ def create_app() -> FastAPI:
                     avgEyeContact=float(round(float(a.get("avgEyeContact") or 0.0), 3)),
                     lastAnalyzedAt=str(a.get("lastAnalyzedAt") or ""),
                     thumbnailUrl=a.get("thumbnailUrl"),
+                    recentAvgConfidence=a.get("recentAvgConfidence"),
+                    previousAvgConfidence=a.get("previousAvgConfidence"),
                 )
             )
         return ChannelSummaryListOut(channels=out)
+
+    @app.post("/api/channels/{channel_name}/summary", response_model=ChannelAISummaryOut)
+    def channel_ai_summary_post(channel_name: str) -> ChannelAISummaryOut:
+        """Anthropic-generated channel performance paragraph (server-side API key only)."""
+        name = (channel_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="channel name is required")
+        try:
+            payload = build_channel_summary_payload(name)
+            text = generate_channel_summary_text(payload)
+            return ChannelAISummaryOut(summary=text)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        except Exception as e:
+            logger.exception("channel_ai_summary_post failed")
+            raise HTTPException(status_code=500, detail="Could not generate summary") from e
+
+    @app.get("/api/channels/{channel_name}/analyses")
+    def channel_analyses_list(channel_name: str, include_result: bool = True) -> dict:
+        """
+        All analyses for a channel (case-insensitive channel_name), sorted by created_at ascending.
+        Path segment is URL-decoded by FastAPI.
+        """
+        name = (channel_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="channel name is required")
+        rows = list_analyses_by_channel(name, include_result_json=include_result)
+        return {"analyses": rows}
 
     @app.get("/api/channels/{channel_id}/collections", response_model=ChannelCollectionsOut)
     def channel_collections(channel_id: str, db: Session = Depends(get_db)) -> ChannelCollectionsOut:
@@ -1071,8 +1193,8 @@ def create_app() -> FastAPI:
             )
         return ChannelCollectionsOut(channel_id=ch.id, channel_name=ch.name, collections=out)
 
-    @app.patch("/api/channels/{channel_id}", response_model=ChannelItemOut)
-    def rename_channel(channel_id: str, payload: ChannelRenameIn, db: Session = Depends(get_db)) -> ChannelItemOut:
+    @app.patch("/api/channels/{channel_id}", response_model=ChannelRenameSuccessOut)
+    def rename_channel(channel_id: str, payload: ChannelRenameIn, db: Session = Depends(get_db)) -> ChannelRenameSuccessOut:
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
@@ -1083,28 +1205,11 @@ def create_app() -> FastAPI:
             select(Channel).where(func.lower(Channel.name) == new_name.lower(), Channel.id != channel_id)
         ).scalar_one_or_none()
         if exists:
-            raise HTTPException(status_code=409, detail="channel name already exists")
+            raise HTTPException(status_code=400, detail="channel name already exists")
         ch.name = new_name
         db.commit()
-        collections = list(db.execute(select(Collection).where(Collection.channel_id == ch.id)).scalars().all())
-        collection_ids = [c.id for c in collections]
-        videos = (
-            int(db.execute(select(func.count()).select_from(Job).where(Job.collection_id.in_(collection_ids))).scalar() or 0)
-            if collection_ids
-            else 0
-        )
-        latest = (
-            db.execute(select(Collection).where(Collection.channel_id == ch.id).order_by(Collection.created_at.desc()))
-            .scalars()
-            .first()
-        )
-        return ChannelItemOut(
-            id=ch.id,
-            name=ch.name,
-            collections=len(collections),
-            videos=videos,
-            latest_collection_id=latest.id if latest else "",
-        )
+        db.refresh(ch)
+        return ChannelRenameSuccessOut(success=True, channel=ChannelIdNameOut(id=ch.id, name=ch.name))
 
     @app.delete("/api/channels/{channel_id}")
     def delete_channel(channel_id: str, db: Session = Depends(get_db)) -> dict:

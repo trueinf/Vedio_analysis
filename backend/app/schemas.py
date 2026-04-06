@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,11 @@ class YouTubeJobIn(BaseModel):
     channel_name: str = ""
 
 
+class YouTubeChannelJobIn(BaseModel):
+    youtube_url: str = ""
+    channel_id: str = ""
+
+
 class SupabaseStorageJobIn(BaseModel):
     storage_path: str = Field(default="", description="Supabase Storage object path (within bucket)")
     original_filename: str = Field(default="upload.mp4")
@@ -133,10 +138,16 @@ class ChannelSummaryOut(BaseModel):
     avgEyeContact: float = 0.0
     lastAnalyzedAt: str = ""
     thumbnailUrl: str | None = None
+    recentAvgConfidence: Optional[float] = None
+    previousAvgConfidence: Optional[float] = None
 
 
 class ChannelSummaryListOut(BaseModel):
     channels: list[ChannelSummaryOut]
+
+
+class ChannelAISummaryOut(BaseModel):
+    summary: str
 
 
 class ChannelCollectionOut(BaseModel):
@@ -156,6 +167,16 @@ class ChannelCollectionsOut(BaseModel):
 
 class ChannelRenameIn(BaseModel):
     name: str
+
+
+class ChannelIdNameOut(BaseModel):
+    id: str
+    name: str
+
+
+class ChannelRenameSuccessOut(BaseModel):
+    success: bool = True
+    channel: ChannelIdNameOut
 
 
 class ComparisonIn(BaseModel):

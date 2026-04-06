@@ -13,10 +13,14 @@ export type AnalysisGridProps = {
   error?: string;
   /** Pre-fills search when landing from channel deck (?channel=) */
   defaultChannel?: string;
+  /** Hide filename/channel search (e.g. on a dedicated channel page). */
+  hideChannelFilter?: boolean;
+  /** Hide the stats bar (e.g. when the page already shows channel-level stats). */
+  hideStatsBar?: boolean;
 };
 
 export function AnalysisGrid(props: AnalysisGridProps) {
-  const { analyses, loading, error = "", defaultChannel } = props;
+  const { analyses, loading, error = "", defaultChannel, hideChannelFilter = false, hideStatsBar = false } = props;
 
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -74,25 +78,29 @@ export function AnalysisGrid(props: AnalysisGridProps) {
 
   return (
     <>
-      <div className="mt-6">
-        <StatsBar
-          total={stats.total}
-          avgScore={stats.avgScore}
-          avgWpm={stats.avgWpm}
-          avgEyeContact={stats.avgEye}
-          loading={loading}
-          error={error}
-        />
-      </div>
+      {!hideStatsBar ? (
+        <div className="mt-6">
+          <StatsBar
+            total={stats.total}
+            avgScore={stats.avgScore}
+            avgWpm={stats.avgWpm}
+            avgEyeContact={stats.avgEye}
+            loading={loading}
+            error={error}
+          />
+        </div>
+      ) : null}
 
-      <div className="mt-6 flex flex-col md:flex-row md:items-center gap-3">
+      <div className={`flex flex-col md:flex-row md:items-center gap-3 ${hideStatsBar ? "mt-0" : "mt-6"}`}>
+        {!hideChannelFilter ? (
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search filename, channel, job id…"
           className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
         />
-        <div className="flex items-center gap-2 flex-wrap">
+        ) : null}
+        <div className={`flex items-center gap-2 flex-wrap ${hideChannelFilter ? "w-full" : ""}`}>
           {(["all", "queued", "processing", "completed", "failed"] as const).map((s) => (
             <button
               key={s}

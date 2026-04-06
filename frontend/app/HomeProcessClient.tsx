@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getJobProgressUnified, uploadVideo, uploadVideos } from "../lib/api";
+import { getJobProgressUnified, uploadVideo } from "../lib/api";
 import { VideoDropzone } from "@/components/VideoDropzone";
 
 type JobRow = {
@@ -57,14 +57,11 @@ export default function HomeProcessClient() {
     setUploading(true);
     try {
       const newRows: JobRow[] = [];
-      if (files.length > 1) {
-        const resp = await uploadVideos(files, channelName);
-        resp.jobs.forEach((u, i) => {
-          newRows.push({ id: u.job_id, name: files[i]?.name || "", status: u.status, stage: "queued", progress: 0 });
-        });
-      } else {
-        const u = await uploadVideo(files[0], channelName);
-        newRows.push({ id: u.job_id, name: files[0].name, status: u.status, stage: "queued", progress: 0 });
+      // One file per request (same strategy as /process). A single multipart /batch with many
+      // large videos often hits Railway/proxy timeouts (502) — the browser then shows a misleading CORS error.
+      for (const f of files) {
+        const u = await uploadVideo(f, channelName);
+        newRows.push({ id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 });
       }
       setJobs((prev) => [...newRows, ...prev]);
       setFiles([]);

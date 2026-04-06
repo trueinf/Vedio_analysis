@@ -250,5 +250,16 @@ def process_job(job_id: str) -> None:
             ytv.updated_at = datetime.utcnow()
             db.commit()
     finally:
+        try:
+            j = db.get(Job, job_id)
+            if j and j.video_path:
+                vp = Path(j.video_path)
+                if vp.is_file() and "youtube-urls" in str(vp).replace("\\", "/"):
+                    try:
+                        vp.unlink()
+                    except OSError:
+                        pass
+        except Exception:
+            pass
         db.close()
 
