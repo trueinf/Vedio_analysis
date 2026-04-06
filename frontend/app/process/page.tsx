@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "../../components/ui";
+import { AnalysisReport } from "../../components/AnalysisReport";
 import { isValidYouTubeVideoUrl, VideoUploadPanel } from "../../components/VideoUploadPanel";
 import {
   createYouTubeJobWithChannel,
+  getAnalysisDetail,
   getJobProgressUnified,
   listChannels,
   uploadVideo,
@@ -17,7 +19,15 @@ type UploadJobRow = {
   status: string;
   stage: string;
   progress: number;
+  /** Set after fetch when status is `completed`; `null` means fetched but no score. */
+  confidence?: number | null;
 };
+
+function truncateFilename(name: string, max = 20): string {
+  const n = name || "";
+  if (n.length <= max) return n;
+  return `${n.slice(0, max)}…`;
+}
 
 function dedupeJobs(rows: UploadJobRow[]): UploadJobRow[] {
   const seen = new Set<string>();
@@ -67,6 +77,10 @@ export default function ProcessPage() {
   const [file, setFile] = useState<File | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedJobs, setUploadedJobs] = useState<UploadJobRow[]>([]);
+  const [activeReportId, setActiveReportId] = useState<string | null>(null);
+  const uploadedJobsRef = useRef<UploadJobRow[]>([]);
+  const confidenceFetchedRef = useRef<Set<string>>(new Set());
+  const hasAutoOpenedReportRef = useRef(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
   const [stage, setStage] = useState<string>("");
@@ -124,6 +138,9 @@ export default function ProcessPage() {
     setStage("");
     setProgress(0);
     setJobError("");
+    setActiveReportId(null);
+    hasAutoOpenedReportRef.current = false;
+    confidenceFetchedRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -137,30 +154,47 @@ export default function ProcessPage() {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (busy) return;
       try {
+        const prevRows = uploadedJobsRef.current;
         const ids = Array.from(
-          new Set(
-            uploadedJobs
-              .map((j) => j.id)
-              .filter((id) => !String(id).startsWith("uploading-"))
-          )
+          new Set(prevRows.map((j) => j.id).filter((id) => !String(id).startsWith("uploading-")))
         );
         if (!ids.length) return;
         const updates = await Promise.all(
           ids.map(async (id) => {
             const job = await getJobProgressUnified(id);
+            const row = prevRows.find((r) => r.id === id);
+            let confidence = row?.confidence;
+            if (job.status === "completed" && !confidenceFetchedRef.current.has(id)) {
+              confidenceFetchedRef.current.add(id);
+              try {
+                const d = await getAnalysisDetail(id);
+                const c = d.analysis?.confidence_score;
+                confidence = typeof c === "number" ? Math.round(c) : null;
+              } catch {
+                confidence = null;
+              }
+            }
             return {
               id,
               status: job.status,
               stage: job.stage ?? "",
               progress: Number(job.progress ?? 0),
               error: job.error_message || "",
+              confidence,
             };
           })
         );
         setUploadedJobs((prev) =>
           prev.map((row) => {
             const u = updates.find((x) => x.id === row.id);
-            return u ? { ...row, status: u.status, stage: u.stage, progress: u.progress } : row;
+            if (!u) return row;
+            return {
+              ...row,
+              status: u.status,
+              stage: u.stage,
+              progress: u.progress,
+              confidence: u.confidence !== undefined ? u.confidence : row.confidence,
+            };
           })
         );
         const sel = updates.find((u) => u.id === jobId);
@@ -342,6 +376,7 @@ export default function ProcessPage() {
               }}
               onVideoLoadedMetadata={(duration) => setVideoDuration(duration)}
               onVideoTimeUpdate={(time) => setCurrentTime(time)}
+              hideJobHistoryTable
             />
           </div>
 
@@ -363,6 +398,96 @@ export default function ProcessPage() {
             </div>
           </Card>
         </div>
+
+        {uploadedJobs.length > 0 ? (
+          <div className="mt-8">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Results</div>
+              <Button variant="premium-ghost" onClick={clearHistory}>
+                Clear history
+              </Button>
+            </div>
+            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
+              {uploadedJobs.map((j) => {
+                const isTemp = String(j.id).startsWith("uploading-");
+                const isActiveReport = activeReportId === j.id;
+                const done = j.status === "completed";
+                const canOpenReport = done && !isTemp;
+                return (
+                  <button
+                    key={j.id}
+                    type="button"
+                    disabled={!canOpenReport}
+                    onClick={() => {
+                      if (!canOpenReport) return;
+                      setActiveReportId(j.id);
+                      setJobId(j.id);
+                    }}
+                    className={`flex-shrink-0 w-[180px] h-[90px] rounded-xl border px-3 py-2 text-left transition-colors ${
+                      isActiveReport
+                        ? "border-cyan-400/80 bg-cyan-500/10 ring-1 ring-cyan-400/30"
+                        : "border-white/10 bg-white/5 hover:bg-white/10"
+                    } ${canOpenReport ? "cursor-pointer" : "cursor-default opacity-90"}`}
+                  >
+                    <div className="text-xs font-medium text-white truncate" title={j.name}>
+                      {truncateFilename(j.name)}
+                    </div>
+                    <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-300">
+                      <span>{j.status}</span>
+                      {done ? <span className="text-emerald-400">✓</span> : null}
+                    </div>
+                    {done ? (
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        Confidence:{" "}
+                        {j.confidence != null ? (
+                          <span className="text-slate-200">{j.confidence}</span>
+                        ) : (
+                          <span className="text-slate-500">…</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        {Math.round((j.progress || 0) * 100)}% · {j.stage || "—"}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
+        {activeReportId ? (
+          <div className="mt-10 max-w-7xl mx-auto">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-1">
+              <div className="text-sm font-medium text-white">
+                Report:{" "}
+                <span className="text-slate-200">
+                  {uploadedJobs.find((j) => j.id === activeReportId)?.name ?? activeReportId}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <a
+                  href={`/video/${activeReportId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-cyan-300 hover:underline"
+                >
+                  Open full page ↗
+                </a>
+                <button
+                  type="button"
+                  aria-label="Close report"
+                  className="rounded-lg border border-white/15 px-2.5 py-1 text-sm text-slate-200 hover:bg-white/10"
+                  onClick={() => setActiveReportId(null)}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <AnalysisReport key={activeReportId} analysisId={activeReportId} embedded />
+          </div>
+        ) : null}
       </div>
     </div>
   );

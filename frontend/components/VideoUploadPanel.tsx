@@ -72,6 +72,8 @@ export function VideoUploadPanel(props: {
   channelId?: string;
   onChannelIdChange?: (id: string) => void;
   youtubeFieldError?: string;
+  /** When true, hide the “Recent uploads” table (e.g. Process page uses an external results strip). */
+  hideJobHistoryTable?: boolean;
 }) {
   const uploadMode = props.uploadMode ?? "file";
   const onUploadModeChange = props.onUploadModeChange ?? (() => {});
@@ -82,6 +84,7 @@ export function VideoUploadPanel(props: {
   const ytEmbedSrc = ytId
     ? `https://www.youtube.com/embed/${ytId}?autoplay=0&rel=0&modestbranding=1&playsinline=1`
     : "";
+  const hideJobHistoryTable = Boolean(props.hideJobHistoryTable);
   return (
     <Card
       id="demo-problem"
@@ -256,7 +259,7 @@ export function VideoUploadPanel(props: {
           {props.ytIngest.message ? <div className="mt-2 text-slate-300">{props.ytIngest.message}</div> : null}
         </div>
       ) : null}
-      {props.uploadedJobs.length ? (
+      {!hideJobHistoryTable && props.uploadedJobs.length ? (
         <div className="mt-4 border border-white/10 rounded-lg overflow-hidden">
           <div className="flex items-center justify-between px-2 py-2 bg-white/5">
             <div className="text-xs text-slate-300">Recent uploads</div>
