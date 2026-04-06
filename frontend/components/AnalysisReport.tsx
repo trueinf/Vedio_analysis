@@ -134,6 +134,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
   const [detail, setDetail] = useState<AnalysisDetail | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerSectionRef = useRef<HTMLDivElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [videoSrcErr, setVideoSrcErr] = useState<string>("");
@@ -187,7 +188,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
   const status = detail?.job?.status ?? (detail?.analysis as any)?.status ?? "queued";
   const progressPercent = detail?.job?.progress_percent ?? 0;
 
-  const seekTo = (t0: number) => {
+  const seekTo = (t0: number, opts?: { scrollIntoView?: boolean }) => {
     const t = Math.max(0, Number(t0 || 0));
     setCurrentTime(t);
     const v = videoRef.current;
@@ -205,10 +206,15 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
     } else {
       pendingSeekRef.current = t;
     }
+    if (opts?.scrollIntoView) {
+      requestAnimationFrame(() => {
+        playerSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
   };
 
   const onSeek = (t0: number, _t1?: number) => {
-    seekTo(t0);
+    seekTo(t0, { scrollIntoView: true });
   };
 
   useEffect(() => {
@@ -441,6 +447,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       ) : (
         <div className={`mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6`}>
           <div className="lg:col-span-8 space-y-6">
+            <div ref={playerSectionRef} className="scroll-mt-6">
             <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div className="text-sm font-semibold">Player</div>
@@ -505,6 +512,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
               {videoSrcErr ? <div className="mt-2 text-xs text-slate-300">{videoSrcErr}</div> : null}
               {decodeErr ? <div className="mt-2 text-xs text-amber-200">{decodeErr}</div> : null}
             </Card>
+            </div>
 
             <InsightsPanel
               insights={keyInsights.insights}
@@ -524,7 +532,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.speech.label}
                   tone={metrics.speech.tone as any}
                   description="Higher isn’t always better—aim for steady, conversational pacing."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
                 <MetricCard
                   title="Eye Contact"
@@ -532,7 +540,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.eye.label}
                   tone={metrics.eye.tone as any}
                   description="On-camera time reflects connection and confidence."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
                 <MetricCard
                   title="Fillers"
@@ -540,7 +548,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.fillers.label}
                   tone={metrics.fillers.tone as any}
                   description="Lower filler usage keeps your message crisp."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
                 <MetricCard
                   title="Gestures"
@@ -548,7 +556,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.gestures.label}
                   tone={metrics.gestures.tone as any}
                   description="Good gesture frequency improves clarity and engagement."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
                 <MetricCard
                   title="Tonal Variation"
@@ -556,7 +564,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.tonal.label}
                   tone={metrics.tonal.tone as any}
                   description="Expressive tone helps retain attention and signal emphasis."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
                 <MetricCard
                   title="Expression Change"
@@ -564,14 +572,14 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                   label={metrics.expr.label}
                   tone={metrics.expr.tone as any}
                   description="Meaningful facial changes help your delivery feel dynamic."
-                  onClick={() => seekTo(0)}
+                  onClick={() => seekTo(0, { scrollIntoView: true })}
                 />
               </div>
             </div>
 
-            <Timeline events={timelineEvents} durationSec={durationSec} currentTime={currentTime} onSeek={(t) => seekTo(t)} />
+            <Timeline events={timelineEvents} durationSec={durationSec} currentTime={currentTime} onSeek={(t) => seekTo(t, { scrollIntoView: true })} />
 
-            <MomentsPanel worstMoments={worstMoments} bestMoments={bestMoments} onSeek={(t0, _t1) => seekTo(t0)} />
+            <MomentsPanel worstMoments={worstMoments} bestMoments={bestMoments} onSeek={(t0, _t1) => seekTo(t0, { scrollIntoView: true })} />
           </div>
 
           <div className="lg:col-span-4 space-y-6">
@@ -581,7 +589,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
                 <div className="text-xs text-slate-400">Actionable suggestions</div>
               </div>
               <div className="mt-3">
-                <CoachPanel comments={coachComments.map((x) => ({ t0: x.t0, comment: x.comment }))} onClickComment={(t0) => seekTo(t0)} />
+                <CoachPanel comments={coachComments.map((x) => ({ t0: x.t0, comment: x.comment }))} onClickComment={(t0) => seekTo(t0, { scrollIntoView: true })} />
               </div>
             </Card>
           </div>
