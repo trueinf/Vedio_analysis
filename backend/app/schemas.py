@@ -77,6 +77,28 @@ class UploadRegisterIn(BaseModel):
     channel_name: str = ""
 
 
+class UploadUrlOut(BaseModel):
+    """Presigned upload target — browser uploads bytes here (not to Railway)."""
+
+    upload_url: str
+    storage_path: str
+    token: str = ""
+
+
+class JobCreateFromStorageIn(BaseModel):
+    """Create a queued job after the file is already in Supabase Storage."""
+
+    storage_path: str
+    filename: str
+    channel_id: Optional[str] = None
+    channel_name: Optional[str] = None
+
+
+class JobCreateFromStorageOut(BaseModel):
+    job_id: str
+    status: JobStatus
+
+
 class YouTubeJobIn(BaseModel):
     url: str = Field(default="", description="YouTube video URL")
     channel_name: str = ""

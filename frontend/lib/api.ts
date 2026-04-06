@@ -53,62 +53,75 @@ export function getSignedUploadMaxBytes(): number {
   return 48 * 1024 * 1024;
 }
 
-/** True when Supabase env is set (avoids bundling `@supabase/supabase-js` on every page that imports `api`). */
-function isSupabaseEnvConfigured(): boolean {
-  return Boolean(
-    String(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim() &&
-      String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim()
-  );
+/** GET /api/upload-url — presigned upload target (bytes go browser → Supabase only). */
+export async function getPresignedUploadUrl(filename: string): Promise<{ upload_url: string; storage_path: string; token: string }> {
+  const res = await fetch(`${API_BASE}/api/upload-url?filename=${encodeURIComponent(filename)}`, { cache: "no-store" });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Presigned URL failed (${res.status}): ${t}`);
+  }
+  return await res.json();
 }
 
-function safeObjectNameForStorage(originalName: string): string {
-  const raw = (originalName || "upload.mp4").trim();
-  const dot = raw.lastIndexOf(".");
-  const ext = dot >= 0 ? raw.slice(dot).toLowerCase() : ".mp4";
-  const base = dot >= 0 ? raw.slice(0, dot) : raw;
-  const cleaned = base
-    .normalize("NFKD")
-    .replace(/[^\w\-]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 120);
-  return `${cleaned || "upload"}${ext}`;
-}
-
-async function uploadJobViaSupabaseSignedUrl(
-  file: File,
-  channelName: string
-): Promise<{ job_id: string; status: JobStatus }> {
-  const { supabase } = await import("./supabaseClient");
-  if (!supabase) throw new Error("Supabase client is not configured (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)");
-
-  await fetch(`${API_BASE}/api/supabase/storage/ensure-bucket`, { method: "POST" });
-
-  const bucket = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "videos";
-  const storagePath = `${crypto.randomUUID()}/${safeObjectNameForStorage(file.name)}`;
-
-  const signedRes = await fetch(`${API_BASE}/api/supabase/storage/signed-upload-url`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bucket, path: storagePath }),
+/** PUT file bytes to Supabase signed URL (XHR for optional progress). */
+export function uploadPutBlobWithProgress(uploadUrl: string, file: File, onProgress?: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Upload to storage failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload to storage"));
+    xhr.open("PUT", uploadUrl);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.send(file);
   });
-  if (!signedRes.ok) throw new Error(`Signed upload URL failed (${signedRes.status})`);
-  const signed = (await signedRes.json()) as { token: string };
+}
 
-  const { error: upErr } = await supabase.storage.from(bucket).uploadToSignedUrl(storagePath, signed.token, file);
-  if (upErr) throw new Error(`Supabase upload failed: ${upErr.message}`);
-
-  const res = await fetch(`${API_BASE}/api/jobs/from-supabase`, {
+/** POST /api/jobs — queue analysis after the object exists in Storage. */
+export async function createJobFromBrowserUpload(
+  storage_path: string,
+  filename: string,
+  opts?: { channel_id?: string; channel_name?: string }
+): Promise<{ job_id: string; status: JobStatus }> {
+  const res = await fetch(`${API_BASE}/api/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      storage_path: storagePath,
-      original_filename: file.name,
-      channel_name: channelName.trim(),
+      storage_path,
+      filename,
+      channel_id: opts?.channel_id || undefined,
+      channel_name: opts?.channel_name?.trim() || undefined,
     }),
   });
-  if (!res.ok) throw new Error(`Create job from Supabase failed (${res.status})`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const d = (await res.json()) as { detail?: unknown };
+      detail = typeof d?.detail === "string" ? d.detail : JSON.stringify(d);
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(`Create job failed (${res.status}): ${detail}`);
+  }
   return await res.json();
+}
+
+async function uploadViaPresignedToSupabase(
+  file: File,
+  channelName: string,
+  opts?: { channel_id?: string; onUploadProgress?: (pct: number) => void }
+): Promise<{ job_id: string; status: JobStatus }> {
+  await fetch(`${API_BASE}/api/supabase/storage/ensure-bucket`, { method: "POST" });
+  const meta = await getPresignedUploadUrl(file.name);
+  await uploadPutBlobWithProgress(meta.upload_url, file, opts?.onUploadProgress);
+  return await createJobFromBrowserUpload(meta.storage_path, file.name, {
+    channel_name: channelName,
+    channel_id: opts?.channel_id,
+  });
 }
 
 export type Job = {
@@ -334,34 +347,19 @@ export async function getYouTubeIngestStatus(ingestId: string): Promise<YouTubeI
 
 export async function uploadVideo(
   file: File,
-  channelName = ""
+  channelName = "",
+  opts?: { channel_id?: string; onUploadProgress?: (pct: number) => void }
 ): Promise<{ job_id: string; status: JobStatus; collection_id?: string; channel_id?: string; channel_name?: string }> {
-  if (file.size <= getSignedUploadMaxBytes() && isSupabaseEnvConfigured()) {
-    return await uploadJobViaSupabaseSignedUrl(file, channelName);
-  }
-  const form = new FormData();
-  form.append("file", file);
-  if (channelName.trim()) form.append("channel_name", channelName.trim());
-  const res = await fetch(`${API_BASE}/api/jobs/upload`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return await res.json();
+  return await uploadViaPresignedToSupabase(file, channelName, opts);
 }
 
-/** POST /api/upload — multipart to API, or direct-to-Supabase when under signed-url cap (avoids long Railway HTTP/2 uploads). */
+/** Same pipeline as uploadVideo — presigned URL + POST /api/jobs (no multipart to Railway). */
 export async function uploadVideoFast(
   file: File,
   channelName = ""
 ): Promise<{ analysis_id: string; status: "queued" }> {
-  if (file.size <= getSignedUploadMaxBytes() && isSupabaseEnvConfigured()) {
-    const out = await uploadJobViaSupabaseSignedUrl(file, channelName);
-    return { analysis_id: out.job_id, status: "queued" };
-  }
-  const form = new FormData();
-  form.append("file", file);
-  if (channelName.trim()) form.append("channel_name", channelName.trim());
-  const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return await res.json();
+  const out = await uploadViaPresignedToSupabase(file, channelName);
+  return { analysis_id: out.job_id, status: "queued" };
 }
 
 export type AnalysisDetail = {
@@ -435,14 +433,11 @@ export async function compareAnalyses(leftAnalysisId: string, rightAnalysisId: s
   return await res.json();
 }
 
-/**
- * Single POST with all files — can exceed reverse-proxy timeouts for many/large videos (502).
- * Prefer looping {@link uploadVideo} per file (home page and /process use that pattern).
- */
+/** Parallel uploads; each file uses presigned Storage + POST /api/jobs (no batch on Railway). */
 export async function uploadVideos(
   files: File[],
   channelName = "",
-  collectionTitle = ""
+  _collectionTitle = ""
 ): Promise<{
   jobs: { job_id: string; status: JobStatus; collection_id?: string; channel_id?: string; channel_name?: string }[];
   collection_id?: string;
@@ -451,13 +446,8 @@ export async function uploadVideos(
   suggested_channel_name?: string;
   suggestion_confidence?: string;
 }> {
-  const form = new FormData();
-  for (const file of files) form.append("files", file);
-  if (channelName.trim()) form.append("channel_name", channelName.trim());
-  if (collectionTitle.trim()) form.append("collection_title", collectionTitle.trim());
-  const res = await fetch(`${API_BASE}/api/jobs/upload/batch`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Batch upload failed (${res.status})`);
-  return await res.json();
+  const jobs = await Promise.all(files.map((f) => uploadVideo(f, channelName)));
+  return { jobs };
 }
 
 export async function createJobFromYouTubeUrl(url: string): Promise<{ job_id: string; status: JobStatus }> {

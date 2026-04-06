@@ -25,6 +25,8 @@ class Job(Base):
 
     original_filename: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     video_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # "file" = local/API upload path; "supabase_storage" = browser uploaded to Storage, worker downloads by path
+    job_source: Mapped[str] = mapped_column(String(32), default="file", nullable=False)
     collection_id: Mapped[str] = mapped_column(String(36), default="", nullable=False)
 
     duration_sec: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

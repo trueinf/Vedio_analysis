@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +38,47 @@ def _ensure_local_upload_file(job: Job) -> str:
     """
     API and worker often run as separate Railway services: uploads land on the API disk only.
     If the file is missing locally, download from Supabase Storage (same path used on upload).
+
+    For job_source == supabase_storage (browser uploaded directly to Storage), download to a temp
+    file under the system temp dir; caller must delete via _temp_download_path_for_job.
     """
+    source = getattr(job, "job_source", None) or "file"
+    if source == "supabase_storage":
+        ext = Path(job.original_filename).suffix or ".mp4"
+        tmp = Path(tempfile.gettempdir()) / f"va-{job.id}{ext}"
+        candidates: list[str] = []
+        try:
+            row = get_analysis_by_job_id(job.id)
+            if row:
+                vp = (row.get("video_storage_path") or "").strip().lstrip("/")
+                if vp:
+                    candidates.append(vp)
+        except Exception:
+            pass
+        candidates.append(f"{job.id}/{job.original_filename}")
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for c in candidates:
+            if c and c not in seen:
+                seen.add(c)
+                uniq.append(c)
+        from app.supabase_repo import _configured, download_file_from_storage
+
+        if not _configured():
+            raise FileNotFoundError("Supabase is not configured; cannot fetch supabase_storage job video.")
+        last_err: Exception | None = None
+        for sp in uniq:
+            try:
+                data = download_file_from_storage(storage_path=sp)
+                tmp.write_bytes(data)
+                print(f"[worker] supabase_storage: downloaded {sp} -> {tmp}")
+                return str(tmp)
+            except Exception as e:
+                last_err = e
+        raise FileNotFoundError(
+            f"Could not download supabase_storage video (tried {uniq}): {last_err}"
+        ) from last_err
+
     path = Path(job.video_path)
     if path.is_file():
         return str(path)
@@ -117,6 +158,8 @@ def process_job(job_id: str) -> None:
         sb_update_analysis_status(job_id=job.id, status=job.status.value, stage=job.stage, progress=job.progress)
 
         local_video = _ensure_local_upload_file(job)
+        if (getattr(job, "job_source", None) or "file") == "supabase_storage":
+            supabase_tmp_cleanup = local_video
         logger.info("Processing file: %s", local_video)
         dur = int(probe_duration_sec(local_video, ffprobe_bin=settings.ffprobe_bin) or 0)
         job.duration_sec = dur
@@ -250,6 +293,13 @@ def process_job(job_id: str) -> None:
             ytv.updated_at = datetime.utcnow()
             db.commit()
     finally:
+        if supabase_tmp_cleanup:
+            try:
+                tp = Path(supabase_tmp_cleanup)
+                if tp.is_file() and tp.name.startswith("va-"):
+                    tp.unlink()
+            except OSError:
+                pass
         try:
             j = db.get(Job, job_id)
             if j and j.video_path:

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import ORJSONResponse
@@ -27,10 +27,9 @@ from app.models import (
     YouTubeVideo,
     YouTubeVideoStatus,
 )
-from app.migrations import ensure_agent_tables, ensure_job_progress_columns, ensure_youtube_tables
+from app.migrations import ensure_agent_tables, ensure_job_progress_columns, ensure_job_source_column, ensure_youtube_tables
 from app.comparison_engine import benchmark_from_results, build_comparison_report
 from app.schemas import (
-    BatchUploadResponse,
     ComparisonIn,
     ComparisonOut,
     ChannelCollectionOut,
@@ -45,6 +44,8 @@ from app.schemas import (
     ChannelSummaryOut,
     CollectionSummaryOut,
     HealthOut,
+    JobCreateFromStorageIn,
+    JobCreateFromStorageOut,
     JobCreateResponse,
     JobHistoryItemOut,
     JobHistoryOut,
@@ -57,12 +58,18 @@ from app.schemas import (
     YouTubeJobIn,
     YouTubeChannelJobIn,
     SupabaseStorageJobIn,
-    FastUploadResponse,
-    UploadRegisterIn,
+    UploadUrlOut,
 )
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _supabase_configured() -> bool:
+    sk = (settings.supabase_service_role_key or settings.supabase_service_key or "").strip()
+    return bool((settings.supabase_url or "").strip() and sk)
+
+
 from app.utils.files import ensure_dir, safe_filename
 from app.worker_queue import enqueue_job, enqueue_task
 from app.supabase_repo import (
@@ -288,95 +295,12 @@ def _collection_summary(jobs: list[Job]) -> dict:
         "failed_job_ids": failed_job_ids,
     }
 
-
-async def _upload_multipart_core(
-    file: UploadFile,
-    channel_name: str,
-    db: Session,
-) -> UploadResponse:
-    """
-    Stream upload to disk, mirror to Supabase Storage, enqueue worker.
-    Duration is probed in the worker (keeps HTTP fast for large files).
-    """
-    if not file:
-        raise HTTPException(status_code=400, detail="file is required")
-    job_id = str(uuid.uuid4())
-    original = safe_filename(file.filename or "upload.mp4")
-    suggested, conf = _suggest_channel_name([original])
-    final_channel = channel_name.strip() or suggested
-    channel = _get_or_create_channel(db, final_channel)
-    collection_id = str(uuid.uuid4())
-    collection = Collection(
-        id=collection_id,
-        created_at=datetime.utcnow(),
-        channel_id=channel.id,
-        title=f"{channel.name} single upload",
-    )
-    db.add(collection)
-    db.commit()
-    dest = build_local_upload_path(job_id, original)
-
-    with dest.open("wb") as f:
-        while True:
-            chunk = await file.read(1024 * 1024 * 8)
-            if not chunk:
-                break
-            f.write(chunk)
-
-    duration = 0
-    storage_path = f"{job_id}/{original}"
-    storage_ok = False
-    try:
-        upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
-        storage_ok = True
-    except Exception:
-        pass
-    try:
-        upsert_analysis_row(
-            analysis_id=job_id,
-            source_type="upload",
-            source_url="",
-            title=original,
-            video_storage_path=storage_path if storage_ok else "",
-            duration_sec=int(duration or 0),
-            status="queued",
-            stage="queued",
-            progress=0.0,
-        )
-    except Exception:
-        pass
-
-    now = datetime.utcnow()
-    job = Job(
-        id=job_id,
-        created_at=now,
-        updated_at=now,
-        status=JobStatus.queued,
-        original_filename=original,
-        video_path=str(dest),
-        collection_id=collection_id,
-        duration_sec=duration,
-    )
-    db.add(job)
-    db.commit()
-
-    enqueue_job(job_id)
-    return UploadResponse(
-        job_id=job_id,
-        status=job.status.value,
-        collection_id=collection_id,
-        channel_id=channel.id,
-        channel_name=channel.name,
-        suggested_channel_name=suggested,
-        suggestion_confidence=conf,
-    )
-
-
 def create_app() -> FastAPI:
     ensure_dir(settings.data_dir)
     ensure_dir(settings.models_dir)
     Base.metadata.create_all(bind=engine)
     ensure_job_progress_columns(engine)
+    ensure_job_source_column(engine)
     ensure_agent_tables(engine)
     ensure_youtube_tables(engine)
     ensure_dir(settings.uploads_dir)
@@ -427,6 +351,95 @@ def create_app() -> FastAPI:
             use_rq_queue=bool(settings.use_rq_queue),
         )
 
+    # --- Direct-to-Supabase uploads (browser never sends video bytes to Railway) ---
+    @app.get("/api/upload-url", response_model=UploadUrlOut)
+    def api_get_presigned_upload_url(filename: str = Query(..., min_length=1)) -> UploadUrlOut:
+        if not _supabase_configured():
+            raise HTTPException(status_code=503, detail="Supabase is not configured on the server")
+        original = safe_filename(filename)
+        storage_path = f"videos/{uuid.uuid4()}/{original}"
+        bucket = settings.supabase_bucket.strip() or "videos"
+        try:
+            out = create_signed_upload_url(bucket=bucket, path=storage_path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+        su = str(out.get("signed_url") or out.get("signedURL") or "").strip()
+        if not su:
+            raise HTTPException(status_code=500, detail="failed to create signed upload url")
+        return UploadUrlOut(
+            upload_url=su,
+            storage_path=str(out.get("path") or storage_path).lstrip("/"),
+            token=str(out.get("token") or ""),
+        )
+
+    @app.post("/api/jobs", response_model=JobCreateFromStorageOut)
+    def create_job_after_storage_upload(payload: JobCreateFromStorageIn, db: Session = Depends(get_db)) -> JobCreateFromStorageOut:
+        storage_path = (payload.storage_path or "").strip().lstrip("/")
+        if not storage_path:
+            raise HTTPException(status_code=400, detail="storage_path is required")
+        original = safe_filename(payload.filename or "upload.mp4")
+        job_id = str(uuid.uuid4())
+        ext = Path(original).suffix or ".mp4"
+        dest = Path(settings.uploads_dir) / f"{job_id}{ext}"
+
+        cid = (payload.channel_id or "").strip()
+        cn = (payload.channel_name or "").strip()
+        if cid:
+            ch = db.get(Channel, cid)
+            if not ch:
+                raise HTTPException(status_code=404, detail="channel not found")
+            channel_name_for_sb = ch.name
+        else:
+            suggested, _ = _suggest_channel_name([original])
+            ch = _get_or_create_channel(db, cn or suggested)
+            channel_name_for_sb = ch.name
+
+        collection_id = str(uuid.uuid4())
+        coll = Collection(
+            id=collection_id,
+            created_at=datetime.utcnow(),
+            channel_id=ch.id,
+            title=f"{ch.name} upload",
+        )
+        db.add(coll)
+        db.commit()
+
+        now = datetime.utcnow()
+        job = Job(
+            id=job_id,
+            created_at=now,
+            updated_at=now,
+            status=JobStatus.queued,
+            original_filename=original,
+            video_path=str(dest),
+            job_source="supabase_storage",
+            collection_id=collection_id,
+            duration_sec=0,
+            stage="queued",
+            progress=0.0,
+            error_message="",
+            result_path="",
+        )
+        db.add(job)
+        db.commit()
+        try:
+            upsert_analysis_row(
+                analysis_id=job_id,
+                source_type="upload",
+                source_url="",
+                title=original,
+                video_storage_path=storage_path,
+                duration_sec=0,
+                status="queued",
+                stage="queued",
+                progress=0.0,
+                channel_name=channel_name_for_sb,
+            )
+        except Exception:
+            pass
+        enqueue_job(job_id)
+        return JobCreateFromStorageOut(job_id=job_id, status="queued")
+
     @app.post("/api/supabase/storage/ensure-bucket")
     def supabase_ensure_bucket() -> dict:
         # Uses backend service role key; safe to call from frontend.
@@ -468,75 +481,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail="failed to create signed download url")
         return {"bucket": bucket, **out}
 
-    # Netlify / misconfigured clients sometimes POST to `/upload` instead of `/api/jobs/upload`.
-    @app.post("/api/jobs/upload", response_model=UploadResponse)
-    @app.post("/upload", response_model=UploadResponse, include_in_schema=False)
-    async def upload_video(
-        file: UploadFile = File(...),
-        channel_name: str = Form(""),
-        db: Session = Depends(get_db),
-    ) -> UploadResponse:
-        return await _upload_multipart_core(file, channel_name, db)
-
-    @app.post("/api/upload", response_model=FastUploadResponse)
-    async def api_upload(
-        request: Request,
-        db: Session = Depends(get_db),
-    ) -> FastUploadResponse:
-        """
-        Production upload: multipart file (streamed to disk + Storage) or JSON body for an existing Storage path.
-        Returns immediately with queued analysis id — processing runs in the worker.
-        """
-        ct = (request.headers.get("content-type") or "").lower()
-        if "application/json" in ct:
-            body = UploadRegisterIn.model_validate(await request.json())
-            storage_path = (body.storage_path or "").strip()
-            if not storage_path:
-                raise HTTPException(status_code=400, detail="storage_path is required")
-            job_id = str(uuid.uuid4())
-            original = safe_filename(body.original_filename or "upload.mp4")
-            dest = build_local_upload_path(job_id, original)
-            now = datetime.utcnow()
-            job = Job(
-                id=job_id,
-                created_at=now,
-                updated_at=now,
-                status=JobStatus.queued,
-                original_filename=original,
-                video_path=str(dest),
-                collection_id="",
-                duration_sec=0,
-                stage="queued",
-                progress=0.0,
-                error_message="",
-                result_path="",
-            )
-            db.add(job)
-            db.commit()
-            try:
-                upsert_analysis_row(
-                    analysis_id=job_id,
-                    source_type="upload",
-                    source_url="",
-                    title=original,
-                    video_storage_path=storage_path,
-                    duration_sec=0,
-                    status="queued",
-                    stage="queued",
-                    progress=0.0,
-                )
-            except Exception:
-                pass
-            enqueue_task("app.supabase_storage_tasks.download_from_supabase_then_enqueue", job_id, storage_path)
-            return FastUploadResponse(analysis_id=job_id, status="queued")
-
-        form = await request.form()
-        uf = form.get("file")
-        channel_name = str(form.get("channel_name") or "")
-        if not uf or not hasattr(uf, "read"):
-            raise HTTPException(status_code=400, detail="file is required (multipart field 'file')")
-        resp = await _upload_multipart_core(uf, channel_name, db)  # type: ignore[arg-type]
-        return FastUploadResponse(analysis_id=resp.job_id, status="queued")
+    # Removed: POST /api/jobs/upload, POST /upload, POST /api/upload (multipart + JSON register),
+    # POST /api/jobs/upload/batch — they accepted raw video bytes on the API host.
+    # Replacement: GET /api/upload-url → PUT file to signed URL (Supabase) → POST /api/jobs.
+    # Legacy JSON register still available via POST /api/jobs/from-supabase after client upload.
 
     # Path must not be `/api/jobs/youtube` — that collides with `GET /api/jobs/{job_id}` (job_id="youtube" → 405 on POST).
     @app.post("/api/jobs/from-youtube", response_model=UploadResponse)
@@ -725,92 +673,6 @@ def create_app() -> FastAPI:
 
         enqueue_task("app.supabase_storage_tasks.download_from_supabase_then_enqueue", job_id, storage_path)
         return UploadResponse(job_id=job_id, status=job.status.value, message="supabase upload queued")
-
-    @app.post("/api/jobs/upload/batch", response_model=BatchUploadResponse)
-    async def upload_videos(
-        files: list[UploadFile] = File(...),
-        channel_name: str = Form(""),
-        collection_title: str = Form(""),
-        db: Session = Depends(get_db),
-    ) -> BatchUploadResponse:
-        if not files:
-            raise HTTPException(status_code=400, detail="files are required")
-        out: list[UploadResponse] = []
-        originals = [safe_filename(f.filename or "upload.mp4") for f in files]
-        suggested, conf = _suggest_channel_name(originals)
-        final_channel = channel_name.strip() or suggested
-        channel = _get_or_create_channel(db, final_channel)
-        collection_id = str(uuid.uuid4())
-        coll = Collection(
-            id=collection_id,
-            created_at=datetime.utcnow(),
-            channel_id=channel.id,
-            title=(collection_title or f"{channel.name} batch").strip(),
-        )
-        db.add(coll)
-        db.commit()
-        now = datetime.utcnow()
-        for file, original in zip(files, originals):
-            job_id = str(uuid.uuid4())
-            dest = build_local_upload_path(job_id, original)
-
-            with dest.open("wb") as f:
-                while True:
-                    chunk = await file.read(1024 * 1024 * 8)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-
-            duration = 0
-            storage_path = f"{job_id}/{original}"
-            try:
-                upload_file_to_storage(local_path=str(dest), storage_path=storage_path, content_type=file.content_type)
-                upsert_analysis_row(
-                    analysis_id=job_id,
-                    source_type="upload",
-                    source_url="",
-                    title=original,
-                    video_storage_path=storage_path,
-                    duration_sec=int(duration or 0),
-                    status="queued",
-                    stage="queued",
-                    progress=0.0,
-                )
-            except Exception:
-                pass
-            job = Job(
-                id=job_id,
-                created_at=now,
-                updated_at=now,
-                status=JobStatus.queued,
-                original_filename=original,
-                video_path=str(dest),
-                collection_id=collection_id,
-                duration_sec=duration,
-            )
-            db.add(job)
-            db.commit()
-            enqueue_job(job_id)
-            out.append(
-                UploadResponse(
-                    job_id=job_id,
-                    status=job.status.value,
-                    collection_id=collection_id,
-                    channel_id=channel.id,
-                    channel_name=channel.name,
-                    suggested_channel_name=suggested,
-                    suggestion_confidence=conf,
-                )
-            )
-        return BatchUploadResponse(
-            jobs=out,
-            collection_id=collection_id,
-            channel_id=channel.id,
-            channel_name=channel.name,
-            suggested_channel_name=suggested,
-            suggestion_confidence=conf,
-            message=f"uploaded {len(out)} file(s)",
-        )
 
     @app.get("/api/analyses")
     def api_list_analyses(limit: int = 200, include_result: bool = False) -> dict:

@@ -41,7 +41,7 @@ export function VideoDropzone(props: {
       />
       <div className="text-5xl mb-4">🎬</div>
       <div className="text-lg font-medium">{props.title || "Drop videos here or click to browse"}</div>
-      <div className="text-slate-400 text-sm mt-1">{props.subtitle || "Supports MP4, MOV, AVI, WebM • Up to 3 hours"}</div>
+      <div className="text-slate-400 text-sm mt-1">{props.subtitle || "Supports MP4, MOV, AVI, WebM · Up to 3 hours · No file limit"}</div>
       {props.files.length > 0 ? (
         <div className="mt-4 text-cyan-400 font-medium break-words">
           {props.files.length} file(s) selected: {props.files.map((f) => f.name).join(", ")}

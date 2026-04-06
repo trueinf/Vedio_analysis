@@ -10,8 +10,6 @@ import {
   uploadVideo,
 } from "../../lib/api";
 import type { ChannelItem } from "../../lib/api";
-import { getApiBaseUrl } from "../../lib/api";
-import { supabase } from "../../lib/supabaseClient";
 
 type UploadJobRow = {
   id: string;
@@ -234,66 +232,33 @@ export default function ProcessPage() {
       if (uploadMode === "youtube") {
         const u = await createYouTubeJobWithChannel(yt, channelId);
         newRows.push({ id: u.job_id, name: "YouTube video", status: u.status, stage: "queued", progress: 0 });
-      } else if (batch.length > 1) {
-        const signedMax = supabaseSignedUploadMaxBytes();
-        const needsSigned = batch.some((f) => f.size <= signedMax);
-        if (needsSigned && !supabase) {
-          setJobError("Supabase frontend env is not set. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to frontend env.");
-          return;
-        }
-        if (needsSigned) {
-          await fetch(`${getApiBaseUrl()}/api/supabase/storage/ensure-bucket`, {
-            method: "POST",
-          });
-        }
-        const bucket = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "videos";
-        for (const f of batch) {
-          const tempId = `uploading-${crypto.randomUUID()}`;
-          const uploadStage = f.size > signedMax ? "uploading_to_api" : "uploading_to_storage";
-          setUploadedJobs((prev) => dedupeJobs([{ id: tempId, name: f.name, status: "processing", stage: uploadStage, progress: 0.01 }, ...prev]));
-
-          if (f.size > signedMax) {
-            const u = await uploadVideo(f, channelName);
+      } else {
+        const results = await Promise.all(
+          batch.map(async (f) => {
+            const tempId = `uploading-${crypto.randomUUID()}`;
+            setUploadedJobs((prev) =>
+              dedupeJobs([{ id: tempId, name: f.name, status: "processing", stage: "uploading_to_storage", progress: 0.01 }, ...prev])
+            );
+            const u = await uploadVideo(f, channelName, {
+              onUploadProgress: (pct) => {
+                setUploadedJobs((prev) =>
+                  prev.map((row) =>
+                    row.id === tempId ? { ...row, progress: pct / 100, stage: "uploading_to_storage" } : row
+                  )
+                );
+              },
+            });
             setUploadedJobs((prev) =>
               dedupeJobs(
-                prev.map((row) => (row.id === tempId ? { id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 } : row))
+                prev.map((row) =>
+                  row.id === tempId ? { id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 } : row
+                )
               )
             );
-            newRows.push({ id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 });
-            continue;
-          }
-
-          const storagePath = `${crypto.randomUUID()}/${safeObjectName(f.name)}`;
-          const signedRes = await fetch(
-            `${getApiBaseUrl()}/api/supabase/storage/signed-upload-url`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ bucket, path: storagePath }),
-            }
-          );
-          if (!signedRes.ok) throw new Error(`Signed upload URL failed (${signedRes.status})`);
-          const signed = (await signedRes.json()) as { token: string };
-          const sb = supabase;
-          if (!sb) throw new Error("Supabase client missing");
-          const { error: upErr } = await sb.storage.from(bucket).uploadToSignedUrl(storagePath, signed.token, f);
-          if (upErr) throw new Error(`Supabase upload failed: ${upErr.message}`);
-
-          const res = await fetch(`${getApiBaseUrl()}/api/jobs/from-supabase`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ storage_path: storagePath, original_filename: f.name, channel_name: channelName }),
-          });
-          if (!res.ok) throw new Error(`Create job from Supabase failed (${res.status})`);
-          const u = await res.json();
-          setUploadedJobs((prev) =>
-            dedupeJobs(prev.map((row) => (row.id === tempId ? { id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 } : row)))
-          );
-          newRows.push({ id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 });
-        }
-      } else if (batch.length === 1) {
-        const u = await uploadVideo(batch[0], channelName);
-        newRows.push({ id: u.job_id, name: batch[0].name, status: u.status, stage: "queued", progress: 0 });
+            return { id: u.job_id, name: f.name, status: u.status, stage: "queued" as const, progress: 0 };
+          })
+        );
+        newRows.push(...results);
       }
       setUploadedJobs((prev) => dedupeJobs([...newRows, ...prev.filter((x) => !String(x.id).startsWith("uploading-"))]));
       if (newRows[0]) {

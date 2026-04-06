@@ -27,6 +27,21 @@ def ensure_job_progress_columns(engine: Engine) -> None:
         return
 
 
+def ensure_job_source_column(engine: Engine) -> None:
+    """Add jobs.job_source for direct-to-Storage uploads (Postgres + SQLite)."""
+    try:
+        from sqlalchemy import inspect
+
+        insp = inspect(engine)
+        cols = [c["name"] for c in insp.get_columns("jobs")]
+        if "job_source" in cols:
+            return
+        with engine.begin() as c:
+            c.execute(text("ALTER TABLE jobs ADD COLUMN job_source VARCHAR(32) NOT NULL DEFAULT 'file'"))
+    except Exception:
+        pass
+
+
 def ensure_agent_tables(engine: Engine) -> None:
     # Create tables if missing (SQLite).
     try:

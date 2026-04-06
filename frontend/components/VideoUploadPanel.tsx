@@ -177,6 +177,9 @@ export function VideoUploadPanel(props: {
               onChange={(e) => props.onPickFiles(Array.from(e.target.files ?? []))}
               className="text-sm text-slate-200 file:mr-2 file:px-3 file:py-1 file:rounded-md file:border-0 file:bg-white/10 file:text-white hover:file:bg-white/15"
             />
+            <div className="w-full text-xs text-slate-400">
+              Supports MP4, MOV, AVI, WebM · Up to 3 hours · No file limit
+            </div>
           </>
         ) : (
           <>
