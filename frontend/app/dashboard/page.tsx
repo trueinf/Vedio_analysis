@@ -22,7 +22,7 @@ export default function DashboardPage() {
       setErr("");
       try {
         const base = getApiBaseUrl();
-        const listRes = await fetch(`${base}/api/analyses?limit=500`, { cache: "no-store" });
+        const listRes = await fetch(`${base}/api/analyses?limit=120`, { cache: "no-store" });
         if (!listRes.ok) throw new Error(`Failed to load analyses (${listRes.status})`);
         const listJson = (await listRes.json()) as { analyses: AnalysisRow[] };
         setAnalyses(listJson.analyses || []);

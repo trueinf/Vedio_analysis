@@ -132,8 +132,11 @@ export type AnalysisRow = {
   result_json?: Record<string, unknown> | null;
 };
 
-export async function listAnalyses(limit = 200): Promise<{ analyses: AnalysisRow[] }> {
-  const res = await fetch(`${API_BASE}/api/analyses?limit=${limit}`, { cache: "no-store" });
+export async function listAnalyses(limit = 120, includeResultJson = false): Promise<{ analyses: AnalysisRow[] }> {
+  const q = new URLSearchParams();
+  q.set("limit", String(limit));
+  if (includeResultJson) q.set("include_result", "true");
+  const res = await fetch(`${API_BASE}/api/analyses?${q.toString()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Analyses list failed (${res.status})`);
   return await res.json();
 }

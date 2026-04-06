@@ -720,8 +720,11 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/analyses")
-    def api_list_analyses(limit: int = 200) -> dict:
-        rows = list_analyses(limit=limit)
+    def api_list_analyses(limit: int = 200, include_result: bool = False) -> dict:
+        """
+        List analyses. Default omits `result_json` per row (huge) — use include_result=true only if needed.
+        """
+        rows = list_analyses(limit=limit, include_result_json=include_result)
         return {"analyses": rows}
 
     @app.get("/api/analyses/{analysis_id}")

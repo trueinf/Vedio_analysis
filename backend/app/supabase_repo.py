@@ -273,21 +273,39 @@ def put_result_json(
         pass
 
 
-def list_analyses(limit: int = 200) -> list[dict[str, Any]]:
+# Listing 500 rows with select("*") pulls huge result_json blobs — keep list views lean.
+_LIST_ANALYSES_COLUMNS_NO_RESULT = (
+    "id, job_id, created_at, updated_at, original_filename, video_url, video_storage_path, "
+    "duration_sec, status, stage, progress, progress_int, error_message, channel_name, "
+    "overall_score, wpm, eye_contact_ratio, fillers_per_min, gestures_per_min, tonal_label, "
+    "confidence_score, energy_score, thumbnail_url, tags, source_type, source_url, title"
+)
+
+
+def list_analyses(limit: int = 200, *, include_result_json: bool = False) -> list[dict[str, Any]]:
     if not _configured():
         return []
     sb = _client()
+    lim = max(1, min(int(limit or 200), 500))
+    sel = "*" if include_result_json else _LIST_ANALYSES_COLUMNS_NO_RESULT
     try:
-        res = (
-            sb.table("analyses")
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(int(limit or 200))
-            .execute()
-        )
+        res = sb.table("analyses").select(sel).order("created_at", desc=True).limit(lim).execute()
         return list(res.data or [])
     except Exception as e:
         print(f"[Supabase] list_analyses FAILED: {e}")
+        # Older DBs may miss a column — fall back to star (slower).
+        if not include_result_json:
+            try:
+                res = (
+                    sb.table("analyses")
+                    .select("*")
+                    .order("created_at", desc=True)
+                    .limit(lim)
+                    .execute()
+                )
+                return list(res.data or [])
+            except Exception as e2:
+                print(f"[Supabase] list_analyses fallback FAILED: {e2}")
         return []
 
 

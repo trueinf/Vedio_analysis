@@ -147,7 +147,7 @@ export default function ComparePage() {
       setLoadingList(true);
       setErr("");
       try {
-        const data = await listAnalyses(500);
+        const data = await listAnalyses(200);
         if (!alive) return;
         const rows = data.analyses || [];
         setAnalyses(rows);
