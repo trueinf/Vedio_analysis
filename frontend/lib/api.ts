@@ -1,5 +1,3 @@
-import { supabase } from "./supabaseClient";
-
 /** Base URL for the FastAPI backend only (no path suffix). */
 function getApiBase(): string {
   // Prefer NEXT_PUBLIC_API_URL (Netlify/Railway), fall back to older NEXT_PUBLIC_API_BASE.
@@ -27,6 +25,14 @@ export function getSignedUploadMaxBytes(): number {
   return 48 * 1024 * 1024;
 }
 
+/** True when Supabase env is set (avoids bundling `@supabase/supabase-js` on every page that imports `api`). */
+function isSupabaseEnvConfigured(): boolean {
+  return Boolean(
+    String(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim() &&
+      String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim()
+  );
+}
+
 function safeObjectNameForStorage(originalName: string): string {
   const raw = (originalName || "upload.mp4").trim();
   const dot = raw.lastIndexOf(".");
@@ -45,6 +51,7 @@ async function uploadJobViaSupabaseSignedUrl(
   file: File,
   channelName: string
 ): Promise<{ job_id: string; status: JobStatus }> {
+  const { supabase } = await import("./supabaseClient");
   if (!supabase) throw new Error("Supabase client is not configured (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)");
 
   await fetch(`${API_BASE}/api/supabase/storage/ensure-bucket`, { method: "POST" });
@@ -224,7 +231,7 @@ export async function uploadVideo(
   file: File,
   channelName = ""
 ): Promise<{ job_id: string; status: JobStatus; collection_id?: string; channel_id?: string; channel_name?: string }> {
-  if (file.size <= getSignedUploadMaxBytes() && supabase) {
+  if (file.size <= getSignedUploadMaxBytes() && isSupabaseEnvConfigured()) {
     return await uploadJobViaSupabaseSignedUrl(file, channelName);
   }
   const form = new FormData();
@@ -240,7 +247,7 @@ export async function uploadVideoFast(
   file: File,
   channelName = ""
 ): Promise<{ analysis_id: string; status: "queued" }> {
-  if (file.size <= getSignedUploadMaxBytes() && supabase) {
+  if (file.size <= getSignedUploadMaxBytes() && isSupabaseEnvConfigured()) {
     const out = await uploadJobViaSupabaseSignedUrl(file, channelName);
     return { analysis_id: out.job_id, status: "queued" };
   }
