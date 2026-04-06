@@ -386,6 +386,21 @@ def create_app() -> FastAPI:
 
     app = FastAPI(default_response_class=ORJSONResponse, title=settings.app_name)
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "https://vedioanalysis.netlify.app",
+            "https://www.vedioanalysis.netlify.app",
+            "http://localhost:3000",
+            "http://localhost:3001",
+        ],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=3600,
+    )
+
     # Best-effort recovery: if the server was restarted mid-job (thread-based worker),
     # move stale processing jobs back to queued so they can be retried.
     try:
@@ -400,26 +415,9 @@ def create_app() -> FastAPI:
     except Exception:
         pass
 
-    def _merge_cors_origins() -> list[str]:
-        origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
-        for extra in (
-            "https://vedioanalysis.netlify.app",
-            "https://videoanalysis.netlify.app",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ):
-            if extra not in origins:
-                origins.append(extra)
-        return origins
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_merge_cors_origins(),
-        allow_origin_regex=(settings.cors_origin_regex or None),
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+    @app.options("/{rest_of_path:path}")
+    async def preflight_handler(rest_of_path: str):
+        return {"status": "ok"}
 
     @app.get("/health", response_model=HealthOut)
     def health() -> HealthOut:
