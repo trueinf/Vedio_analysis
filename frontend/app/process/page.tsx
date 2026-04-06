@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "../../components/ui";
 import { VideoUploadPanel } from "../../components/VideoUploadPanel";
-import { createJobFromYouTubeUrl, getJob, uploadVideo } from "../../lib/api";
+import { createJobFromYouTubeUrl, getJobProgressUnified, uploadVideo } from "../../lib/api";
 import { getApiBaseUrl } from "../../lib/api";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -91,11 +91,12 @@ export default function ProcessPage() {
 
   const refreshSelected = useCallback(async () => {
     if (!jobId) return;
-    const j = await getJob(jobId);
+    const j = await getJobProgressUnified(jobId);
     setStatus(j.status);
-    setStage((j as any).stage ?? "");
-    setProgress(Number((j as any).progress ?? 0));
+    setStage(j.stage ?? "");
+    setProgress(Number(j.progress ?? 0));
     if (j.status === "failed") setJobError(j.error_message || "Job failed");
+    else setJobError("");
   }, [jobId]);
 
   const clearHistory = useCallback(() => {
@@ -128,12 +129,12 @@ export default function ProcessPage() {
         if (!ids.length) return;
         const updates = await Promise.all(
           ids.map(async (id) => {
-            const job = await getJob(id);
+            const job = await getJobProgressUnified(id);
             return {
               id,
               status: job.status,
-              stage: (job as any).stage ?? "",
-              progress: Number((job as any).progress ?? 0),
+              stage: job.stage ?? "",
+              progress: Number(job.progress ?? 0),
               error: job.error_message || "",
             };
           })
@@ -150,6 +151,7 @@ export default function ProcessPage() {
           setStage(sel.stage);
           setProgress(sel.progress);
           if (sel.status === "failed") setJobError(sel.error || "Job failed");
+          else setJobError("");
         }
       } catch {
         // ignore polling blips (offline, IO suspended, etc.)

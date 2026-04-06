@@ -6,7 +6,7 @@ import { Button, Card, premiumSurfaceClass } from "@/components/ui";
 import DarkSelect from "@/components/DarkSelect";
 import { VideoDropzone } from "@/components/VideoDropzone";
 import type { AnalysisDetail, AnalysisRow, JobStatus } from "@/lib/api";
-import { compareAnalyses, getAnalysisDetail, getJob, listAnalyses, uploadVideoFast } from "@/lib/api";
+import { compareAnalyses, getAnalysisDetail, getJobProgressUnified, listAnalyses, uploadVideoFast } from "@/lib/api";
 
 type CompareMetric = {
   key: string;
@@ -192,15 +192,16 @@ export default function ComparePage() {
     let t: ReturnType<typeof setTimeout> | null = null;
     const tick = async () => {
       try {
-        const j = await getJob(newJobId);
+        const j = await getJobProgressUnified(newJobId);
         if (!alive) return;
         setNewStatus(j.status);
-        setNewStage((j as any).stage || "");
-        setNewProgress(Number((j as any).progress ?? 0));
+        setNewStage(j.stage || "");
+        setNewProgress(Number(j.progress ?? 0));
         if (j.status === "failed") {
           setNewError(j.error_message || "Analysis failed");
           return;
         }
+        setNewError("");
         if (j.status === "completed") {
           const d = await fetchDetailWithRetry(newJobId);
           if (!alive) return;

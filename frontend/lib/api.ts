@@ -275,6 +275,40 @@ export async function getAnalysisDetail(analysisId: string): Promise<AnalysisDet
   return await res.json();
 }
 
+/** Prefer Supabase `analysis` fields (same source as Dashboard); fill gaps from SQLite `job` in the same response. */
+function mergeProgressFromDetail(detail: AnalysisDetail): {
+  status: string;
+  stage: string;
+  progress: number;
+  error_message: string;
+} {
+  const a = detail.analysis as Record<string, unknown> | null | undefined;
+  const j = detail.job;
+
+  const pickStr = (primary: unknown, fallback: string) => {
+    const s = primary != null ? String(primary).trim() : "";
+    return s !== "" ? s : fallback;
+  };
+
+  let progress = 0;
+  if (a && typeof a.progress === "number" && Number.isFinite(a.progress)) {
+    progress = a.progress;
+  } else if (a && typeof a.progress === "string") {
+    const p = parseFloat(a.progress);
+    if (Number.isFinite(p)) progress = p;
+  } else if (j) {
+    progress = Number(j.progress ?? 0);
+  }
+
+  const status = pickStr(a?.status, j?.status ?? "");
+  const stage = pickStr(a?.stage, j?.stage ?? "");
+
+  const errRaw = a?.error_message != null ? String(a.error_message).trim() : "";
+  const error_message = errRaw !== "" ? errRaw : (j?.error_message ?? "");
+
+  return { status, stage, progress, error_message };
+}
+
 /** POST /api/compare — two completed analyses by job/analysis id. */
 export async function compareAnalyses(leftAnalysisId: string, rightAnalysisId: string): Promise<{
   comparison_report_id?: string;
@@ -359,6 +393,36 @@ export async function getJob(jobId: string): Promise<Job> {
   if (!res.ok) throw new Error(`Job fetch failed (${res.status})`);
   const data = await res.json();
   return data.job as Job;
+}
+
+/**
+ * Job progress for UI polling: matches Dashboard by preferring Supabase analyses row when present.
+ * Falls back to GET /api/jobs if /api/analyses/{id} fails (e.g. row not created yet).
+ */
+export async function getJobProgressUnified(jobId: string): Promise<{
+  status: JobStatus;
+  stage: string;
+  progress: number;
+  error_message: string;
+}> {
+  try {
+    const detail = await getAnalysisDetail(jobId);
+    const m = mergeProgressFromDetail(detail);
+    return {
+      status: (m.status || "queued") as JobStatus,
+      stage: m.stage,
+      progress: m.progress,
+      error_message: m.error_message,
+    };
+  } catch {
+    const j = await getJob(jobId);
+    return {
+      status: j.status,
+      stage: j.stage ?? "",
+      progress: Number(j.progress ?? 0),
+      error_message: j.error_message || "",
+    };
+  }
 }
 
 export async function listJobs(limit = 200): Promise<{ jobs: JobHistoryItem[] }> {

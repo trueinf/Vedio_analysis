@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getJob, uploadVideo, uploadVideos } from "../lib/api";
+import { getJobProgressUnified, uploadVideo, uploadVideos } from "../lib/api";
 import { VideoDropzone } from "@/components/VideoDropzone";
 
 type JobRow = {
@@ -25,7 +25,16 @@ export default function ProcessPage() {
     const active = jobs.filter((j) => j.status === "queued" || j.status === "processing");
     if (!active.length) return;
     const t = setInterval(async () => {
-      const updates = await Promise.all(active.map((j) => getJob(j.id).catch(() => null)));
+      const updates = await Promise.all(
+        active.map(async (row) => {
+          try {
+            const u = await getJobProgressUnified(row.id);
+            return { id: row.id, ...u };
+          } catch {
+            return null;
+          }
+        })
+      );
       setJobs((prev) =>
         prev.map((row) => {
           const u = updates.find((x) => x?.id === row.id);
@@ -33,8 +42,8 @@ export default function ProcessPage() {
           return {
             ...row,
             status: u.status,
-            stage: (u as any).stage || "",
-            progress: Number((u as any).progress || 0),
+            stage: u.stage || "",
+            progress: Number(u.progress || 0),
             error: u.error_message || "",
           };
         })
