@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
+import { MetricsGrid } from "@/components/MetricsGrid";
+import type { MetricEvent, MetricKey } from "@/components/video-analysis-types";
 import type { ChannelReport, ChannelSummary } from "@/lib/api";
 import {
   clearChannelAISummaryCache,
   fetchChannelAISummary,
   fetchChannelReport,
   fetchChannelsSummary,
+  getAnalysisDetail,
   updateChannelName,
 } from "@/lib/api";
 
@@ -57,6 +60,26 @@ const chartTooltip = {
   contentStyle: { background: "rgba(2,6,23,0.92)", border: "1px solid rgba(255,255,255,0.1)" },
   labelStyle: { color: "#94a3b8" },
 };
+
+function eventToMetricEvent(e: any): MetricEvent {
+  if (!e) return { t0: 0, metric: "", label: "" };
+  return {
+    metric: e.metric ?? e.type,
+    type: e.type,
+    label: e.label ?? e.message ?? e.note ?? e.reason ?? "",
+    t0: Number(e.t0 ?? 0),
+    t1: e.t1 == null ? undefined : Number(e.t1),
+    value: e.value == null ? undefined : Number(e.value),
+    note: e.note,
+    message: e.message,
+  };
+}
+
+function mean(nums: number[]): number | null {
+  const ok = (nums || []).filter((n) => Number.isFinite(n));
+  if (!ok.length) return null;
+  return ok.reduce((a, b) => a + b, 0) / ok.length;
+}
 
 function TrendMetricLine(props: {
   label: string;
@@ -143,6 +166,12 @@ export default function ChannelReportClient(props: { encodedName: string }) {
   const [aiSummary, setAiSummary] = useState("");
   const [aiSummaryLoading, setAiSummaryLoading] = useState(true);
   const [aiSummaryError, setAiSummaryError] = useState("");
+
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
+  const [latestResult, setLatestResult] = useState<any>(null);
+  const [latestDurationSec, setLatestDurationSec] = useState<number>(0);
+  const [latestEvents, setLatestEvents] = useState<MetricEvent[]>([]);
+  const [eyeNotMeasurable, setEyeNotMeasurable] = useState(false);
 
   function showNameErr(msg: string) {
     if (nameErrTimerRef.current) clearTimeout(nameErrTimerRef.current);
@@ -259,6 +288,56 @@ export default function ChannelReportClient(props: { encodedName: string }) {
   }, [rawName]);
 
   useEffect(() => {
+    let alive = true;
+    (async () => {
+      const latestId = (report?.individual_videos || [])[0]?.analysis_id;
+      if (!latestId) {
+        setLatestResult(null);
+        setLatestDurationSec(0);
+        setLatestEvents([]);
+        setEyeNotMeasurable(false);
+        return;
+      }
+      try {
+        const d = await getAnalysisDetail(String(latestId));
+        if (!alive) return;
+        const rj: any = (d as any)?.result_json ?? null;
+        setLatestResult(rj);
+        const dur = Number(rj?.summary?.duration_sec ?? (d as any)?.job?.duration_sec ?? 0);
+        setLatestDurationSec(Number.isFinite(dur) ? dur : 0);
+        const ev = (rj?.events || []) as any[];
+        const drops = (rj?.engagement_drops || []) as any[];
+        const pauses = (rj?.pauses || []) as any[];
+        const best = (rj?.best_moments || []) as any[];
+        const worst = (rj?.worst_moments || []) as any[];
+        const mapped: MetricEvent[] = [];
+        for (const e of ev) mapped.push(eventToMetricEvent(e));
+        for (const e of drops)
+          mapped.push({ ...eventToMetricEvent(e), metric: e.metric ?? e.type ?? "engagement_drop", type: e.type ?? e.metric ?? "engagement_drop" });
+        for (const e of pauses)
+          mapped.push({ ...eventToMetricEvent(e), metric: "pause", type: "pause", label: e.reason ?? e.label ?? e.note ?? "Pause" });
+        for (const e of best)
+          mapped.push({ ...eventToMetricEvent(e), metric: "best_moment", type: "best_moment", label: e.note ?? e.label ?? "Best moment" });
+        for (const e of worst)
+          mapped.push({ ...eventToMetricEvent(e), metric: "worst_moment", type: "worst_moment", label: e.reason ?? e.label ?? "Worst moment" });
+        setLatestEvents(mapped.sort((a, b) => Number(a.t0 || 0) - Number(b.t0 || 0)));
+
+        const faceVisible = Number(rj?.cards?.eye_contact?.face_visible_ratio ?? NaN);
+        setEyeNotMeasurable(Number.isFinite(faceVisible) ? faceVisible < 0.1 : false);
+      } catch {
+        if (!alive) return;
+        setLatestResult(null);
+        setLatestDurationSec(0);
+        setLatestEvents([]);
+        setEyeNotMeasurable(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [report]);
+
+  useEffect(() => {
     return () => {
       if (nameErrTimerRef.current) clearTimeout(nameErrTimerRef.current);
     };
@@ -344,6 +423,51 @@ export default function ChannelReportClient(props: { encodedName: string }) {
     if (r?.recent_avg_confidence == null || r?.previous_avg_confidence == null) return null;
     return Number(r.recent_avg_confidence) - Number(r.previous_avg_confidence);
   }, [report]);
+
+  const aggregatedMetricCards = useMemo(() => {
+    const vids = report?.individual_videos || [];
+    const wpm = totals.avgWpm;
+    const eyeRatio = totals.avgEye > 0 ? totals.avgEye / 100 : 0;
+
+    const fillers = mean(
+      vids
+        .map((v) => Number(v.metrics?.filler_rate))
+        .filter((n) => Number.isFinite(n))
+    );
+    const gestures = mean(
+      vids
+        .map((v) => Number(v.metrics?.gesture_rate))
+        .filter((n) => Number.isFinite(n))
+    );
+    const tonalScore = mean(
+      vids
+        .map((v) => Number(v.metrics?.tonal_variation))
+        .filter((n) => Number.isFinite(n))
+    );
+    const expr = mean(
+      vids
+        .map((v) => Number(v.metrics?.expression_change))
+        .filter((n) => Number.isFinite(n))
+    );
+
+    const tonalLabel = String(latestResult?.cards?.tonal_variation?.label ?? "").toLowerCase() || null;
+    const exprByType = (latestResult?.cards?.expressions?.by_type ?? {}) as Record<string, number>;
+    const exprTop = Object.entries(exprByType).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] ?? "-";
+    const exprChangesPerMin = Number.isFinite(expr ?? NaN) ? Number(expr) : 0;
+    const exprBadge = exprChangesPerMin < 20 ? "low" : exprChangesPerMin <= 60 ? "normal" : "high";
+
+    return {
+      wpm,
+      fillers: fillers == null ? "-" : Number(fillers.toFixed(1)),
+      eye: Number.isFinite(eyeRatio) ? eyeRatio : "-",
+      gestures: gestures == null ? "-" : Number(gestures.toFixed(1)),
+      tonalScore: tonalScore == null ? null : Number(tonalScore.toFixed(1)),
+      tonalLabel,
+      exprTop,
+      exprChangesPerMin,
+      exprBadge,
+    };
+  }, [report, totals.avgWpm, totals.avgEye, latestResult]);
 
   async function regenerateAiSummary() {
     clearChannelAISummaryCache(rawName.trim());
@@ -575,6 +699,42 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="mt-10">
+        <h2 className="text-lg font-semibold">Detailed metrics</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Click any metric for the full breakdown (modal uses your most recent completed video).
+        </p>
+        <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="grid grid-cols-12 gap-0">
+            <MetricsGrid
+              show
+              currentStepId="channel"
+              demoMetricValue={Number(aggregatedMetricCards.wpm) || 0}
+              selectedMetric={selectedMetric}
+              onSelectMetric={(m) => setSelectedMetric(m)}
+              cards={aggregatedMetricCards}
+              events={latestEvents}
+              durationSec={latestDurationSec || 0}
+              eyeNotMeasurable={eyeNotMeasurable}
+              metricDetailContext={
+                latestResult
+                  ? {
+                      durationSec: latestDurationSec || 0,
+                      binSizeSec: 10,
+                      timelineBins: (latestResult?.timeline_bins ?? latestResult?.timelineBins ?? []) as any[],
+                      rawCards: (latestResult?.cards ?? null) as any,
+                      transcriptPreview: String(latestResult?.transcript_preview ?? latestResult?.transcriptPreview ?? "") || null,
+                      summary: (latestResult?.summary ?? null) as any,
+                      quality: (latestResult?.quality ?? null) as any,
+                      speakers: (latestResult?.speakers ?? null) as any,
+                    }
+                  : null
+              }
+            />
+          </div>
+        </div>
       </div>
 
       <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -28,16 +28,16 @@ function StatCard(props: {
 }) {
   const tone =
     props.badge.tone === "good"
-      ? "bg-green-100 text-green-700"
+      ? "bg-emerald-400/10 border-emerald-400/25 text-emerald-200"
       : props.badge.tone === "warn"
-      ? "bg-amber-100 text-amber-700"
-      : props.badge.tone === "bad"
-      ? "bg-red-100 text-red-700"
-      : "bg-slate-100 text-slate-700";
+        ? "bg-amber-400/10 border-amber-400/25 text-amber-200"
+        : props.badge.tone === "bad"
+          ? "bg-red-400/10 border-red-400/25 text-red-200"
+          : "bg-white/5 border-white/15 text-slate-200";
   return (
     <Card
       className={`p-4 h-full transition-all ${props.onClick ? "cursor-pointer hover:shadow-md" : ""} ${
-        props.active ? "ring-2 ring-blue-300 shadow-md" : ""
+        props.active ? "ring-2 ring-cyan-400/40 shadow-md" : ""
       } bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.01]`}
       onClick={props.onClick}
     >
@@ -46,7 +46,7 @@ function StatCard(props: {
       <div className="mt-3 flex items-end justify-between gap-2">
         <div className="text-xl shrink-0">{props.icon ?? ""}</div>
         <div className="text-4xl font-semibold leading-none text-right min-w-0 flex-1">{props.value}</div>
-        <div className={`text-xs px-2 py-1 rounded-md shrink-0 self-end ${tone}`}>{props.badge.text}</div>
+        <div className={`text-xs px-2 py-1 rounded-md shrink-0 self-end border ${tone}`}>{props.badge.text}</div>
       </div>
       {props.hint ? (
         <p className="text-xs text-slate-400 mt-3 pt-3 border-t border-white/10 leading-relaxed">{props.hint}</p>

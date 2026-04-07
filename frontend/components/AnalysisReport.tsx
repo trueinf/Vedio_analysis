@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Card, premiumSurfaceClass } from "@/components/ui";
 import { InsightsPanel } from "@/components/InsightsPanel";
-import MetricCard from "@/components/MetricCard";
+import { MetricsGrid } from "@/components/MetricsGrid";
 import { Timeline } from "@/components/Timeline";
 import { MomentsPanel } from "@/components/MomentsPanel";
 import { CoachPanel } from "@/components/CoachPanel";
@@ -14,6 +14,7 @@ import { getAnalysisDetail, getApiBaseUrl } from "@/lib/api";
 import { supabase as sbClient } from "@/lib/supabaseClient";
 
 import type { MetricEvent } from "@/components/video-analysis-types";
+import type { MetricKey } from "@/components/video-analysis-types";
 
 const formatTime = (sec: number) => {
   const s = Math.max(0, Math.floor(sec || 0));
@@ -141,6 +142,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
   const [decodeErr, setDecodeErr] = useState<string>("");
   const pendingSeekRef = useRef<number | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -313,6 +315,17 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       : "neutral";
 
     return {
+      raw: {
+        wpm,
+        eye,
+        fillers,
+        gestures,
+        tonalLabel,
+        tonalScore,
+        exprChanges,
+        exprPerMin,
+        exprByType: (cards?.expressions?.by_type ?? {}) as Record<string, number>,
+      },
       speech: {
         value: Number.isFinite(wpm) ? `${Math.round(wpm)} WPM` : "—",
         label: speechTone === "good" ? "Good" : speechTone === "moderate" ? "Moderate" : "Poor",
@@ -345,6 +358,35 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       },
     };
   }, [cards, durationSec]);
+
+  const metricCardsSnapshot = useMemo(() => {
+    const r = metrics.raw;
+    const duration = durationSec;
+    const exprByType = r.exprByType || {};
+    const exprTop = Object.entries(exprByType).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] ?? "-";
+    const exprChangesPerMin = Number.isFinite(r.exprPerMin) ? r.exprPerMin : 0;
+    const exprBadge = exprChangesPerMin < 20 ? "low" : exprChangesPerMin <= 60 ? "normal" : "high";
+    return {
+      wpm: Number.isFinite(r.wpm) ? r.wpm : "-",
+      fillers: Number.isFinite(r.fillers) ? r.fillers : "-",
+      eye: Number.isFinite(r.eye) ? r.eye : "-",
+      gestures: Number.isFinite(r.gestures) ? r.gestures : "-",
+      tonalScore: Number.isFinite(r.tonalScore) ? r.tonalScore : null,
+      tonalLabel: r.tonalLabel ? String(r.tonalLabel).toLowerCase() : null,
+      exprTop,
+      exprChangesPerMin: duration > 0 ? exprChangesPerMin : 0,
+      exprBadge,
+    };
+  }, [metrics.raw, durationSec]);
+
+  const eyeNotMeasurable = useMemo(() => {
+    const eyeCard = cards?.eye_contact ?? {};
+    const faceVisible = Number(eyeCard?.face_visible_ratio ?? NaN);
+    // If we rarely detect a face, eye contact labels are not meaningful.
+    if (Number.isFinite(faceVisible) && faceVisible < 0.1) return true;
+    const eye = metrics.raw.eye;
+    return !Number.isFinite(eye) || eye <= 0;
+  }, [cards, metrics.raw.eye]);
 
   const keyInsights = useMemo(() => deriveKeyInsights(result, durationSec), [result, durationSec]);
 
@@ -525,54 +567,18 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
 
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 backdrop-blur">
               <div className="text-sm font-semibold mb-3">Metrics</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                <MetricCard
-                  title="Speech Rate"
-                  value={String(metrics.speech.value)}
-                  label={metrics.speech.label}
-                  tone={metrics.speech.tone as any}
-                  description="Higher isn’t always better—aim for steady, conversational pacing."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
-                />
-                <MetricCard
-                  title="Eye Contact"
-                  value={String(metrics.eye.value)}
-                  label={metrics.eye.label}
-                  tone={metrics.eye.tone as any}
-                  description="On-camera time reflects connection and confidence."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
-                />
-                <MetricCard
-                  title="Fillers"
-                  value={String(metrics.fillers.value)}
-                  label={metrics.fillers.label}
-                  tone={metrics.fillers.tone as any}
-                  description="Lower filler usage keeps your message crisp."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
-                />
-                <MetricCard
-                  title="Gestures"
-                  value={String(metrics.gestures.value)}
-                  label={metrics.gestures.label}
-                  tone={metrics.gestures.tone as any}
-                  description="Good gesture frequency improves clarity and engagement."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
-                />
-                <MetricCard
-                  title="Tonal Variation"
-                  value={String(metrics.tonal.value)}
-                  label={metrics.tonal.label}
-                  tone={metrics.tonal.tone as any}
-                  description="Expressive tone helps retain attention and signal emphasis."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
-                />
-                <MetricCard
-                  title="Expression Change"
-                  value={String(metrics.expr.value)}
-                  label={metrics.expr.label}
-                  tone={metrics.expr.tone as any}
-                  description="Meaningful facial changes help your delivery feel dynamic."
-                  onClick={() => seekTo(0, { scrollIntoView: true })}
+              <div className="grid grid-cols-12 gap-0">
+                <MetricsGrid
+                  show
+                  currentStepId="report"
+                  demoMetricValue={Number(metrics.raw.wpm) || 0}
+                  selectedMetric={selectedMetric}
+                  onSelectMetric={(m) => setSelectedMetric(m)}
+                  cards={metricCardsSnapshot}
+                  events={timelineEvents}
+                  durationSec={durationSec}
+                  eyeNotMeasurable={eyeNotMeasurable}
+                  metricDetailContext={null}
                 />
               </div>
             </div>
