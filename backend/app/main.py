@@ -12,9 +12,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import ORJSONResponse
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 
 from app.db import Base, engine, get_db
 from app.models import (
@@ -1090,36 +1089,27 @@ def create_app() -> FastAPI:
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
-        collections = list(db.execute(select(Collection).where(Collection.channel_id == channel_id)).scalars().all())
-        collection_ids = [c.id for c in collections]
+        # If this raised 409 before: detail was
+        # "cannot delete channel while dependent database rows still reference it" (IntegrityError on FK).
+        # Cascade deletes below (SQLite/Postgres). Job has no channel_id — link is Channel → Collection → Job.
         try:
+            collection_ids = list(
+                db.execute(select(Collection.id).where(Collection.channel_id == channel_id)).scalars().all()
+            )
             if collection_ids:
-                jobs = list(db.execute(select(Job).where(Job.collection_id.in_(collection_ids))).scalars().all())
-                job_ids = [j.id for j in jobs]
+                job_ids = list(
+                    db.execute(select(Job.id).where(Job.collection_id.in_(collection_ids))).scalars().all()
+                )
                 if job_ids:
-                    # YouTube ingest rows reference jobs.id; Postgres may enforce FK — delete these first.
-                    ytvs = list(
-                        db.execute(select(YouTubeVideo).where(YouTubeVideo.job_id.in_(job_ids))).scalars().all()
-                    )
-                    for y in ytvs:
-                        db.delete(y)
-                    for j in jobs:
-                        db.delete(j)
-                for c in collections:
-                    db.delete(c)
-            db.delete(ch)
+                    db.execute(delete(YouTubeVideo).where(YouTubeVideo.job_id.in_(job_ids)))
+                db.execute(delete(Job).where(Job.collection_id.in_(collection_ids)))
+                db.execute(delete(Collection).where(Collection.channel_id == channel_id))
+            db.execute(delete(Channel).where(Channel.id == channel_id))
             db.commit()
-        except IntegrityError as e:
-            db.rollback()
-            logger.warning("delete_channel integrity channel_id=%s: %s", channel_id, e)
-            raise HTTPException(
-                status_code=409,
-                detail="cannot delete channel while dependent database rows still reference it",
-            ) from e
         except Exception as e:
             db.rollback()
-            logger.exception("delete_channel failed channel_id=%s", channel_id)
-            raise HTTPException(status_code=500, detail="delete failed") from e
+            logger.exception("Delete channel failed: %s", e)
+            raise HTTPException(status_code=500, detail=str(e)) from e
         # Supabase analyses rows are never deleted here (historical data preserved).
         return {"success": True, "id": channel_id}
 

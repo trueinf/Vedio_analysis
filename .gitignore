@@ -16,6 +16,7 @@ htmlcov/
 # Backend data and artifacts
 backend/data/
 backend/.env
+backend/tests/_test_app.db
 
 # Node / frontend
 node_modules/
