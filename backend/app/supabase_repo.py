@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import time
 import uuid
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 import statistics
 from typing import Any
@@ -12,14 +14,66 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_supabase_client: Any | None = None
+
 
 def _configured() -> bool:
     return bool(settings.supabase_url and settings.supabase_service_role_key)
 
 
-def _client():
+def reset_supabase() -> None:
+    global _supabase_client
+    _supabase_client = None
+
+
+def get_supabase() -> Any:
+    """
+    Cached Supabase client. We reset+recreate on transient transport failures (Railway idle timeouts).
+    """
+    global _supabase_client
+    if _supabase_client is not None:
+        return _supabase_client
     from supabase import create_client  # type: ignore
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+
+    _supabase_client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    return _supabase_client
+
+
+def _client():
+    return get_supabase()
+
+
+def _is_retryable_transport_error(e: Exception) -> bool:
+    s = str(e)
+    needles = ("Broken pipe", "Connection reset", "ConnectionError", "BrokenPipeError", "ReadTimeout")
+    return any(n in s for n in needles)
+
+
+def supabase_retry(max_attempts: int = 3, delay: float = 0.5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error: Exception | None = None
+            for attempt in range(int(max_attempts or 3)):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if _is_retryable_transport_error(e) and attempt < int(max_attempts or 3) - 1:
+                        try:
+                            reset_supabase()
+                        except Exception:
+                            pass
+                        time.sleep(float(delay) * (attempt + 1))
+                        continue
+                    raise
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("Supabase retry failed without exception")
+
+        return wrapper
+
+    return decorator
 
 
 def _bucket_file_size_limit() -> int:
@@ -37,6 +91,7 @@ def _ensure_bucket_file_size_limit(sb: Any, bucket_id: str) -> None:
         pass
 
 
+@supabase_retry()
 def ensure_bucket_exists(bucket_name: str) -> None:
     if not _configured():
         return
@@ -62,6 +117,7 @@ def ensure_bucket_exists(bucket_name: str) -> None:
     _ensure_bucket_file_size_limit(sb, name)
 
 
+@supabase_retry()
 def create_signed_upload_url(*, bucket: str, path: str) -> dict[str, str]:
     if not _configured():
         raise RuntimeError("Supabase is not configured")
@@ -84,6 +140,7 @@ def create_signed_upload_url(*, bucket: str, path: str) -> dict[str, str]:
     return {"signed_url": signed_url, "token": token, "path": p}
 
 
+@supabase_retry()
 def create_signed_download_url(*, bucket: str, path: str, expires_in_sec: int = 3600) -> dict[str, str]:
     """
     Create a signed *download* URL for a private object in Storage.
@@ -104,6 +161,7 @@ def create_signed_download_url(*, bucket: str, path: str, expires_in_sec: int = 
     signed_url = str(getattr(data, "signed_url", "") or getattr(data, "signedURL", "") or "")
     return {"signed_url": signed_url, "path": p}
 
+@supabase_retry()
 def upsert_analysis_row(
     *,
     analysis_id: str,
@@ -153,6 +211,7 @@ def upsert_analysis_row(
         print(f"[Supabase] upsert_analysis_row FAILED for {analysis_id}: {e}")
 
 
+@supabase_retry()
 def update_analysis_status(
     *, analysis_id: str, status: str, stage: str, progress: float, error_message: str = ""
 ) -> None:
@@ -173,6 +232,7 @@ def update_analysis_status(
         print(f"[Supabase] update_analysis_status FAILED for {analysis_id}: {e}")
 
 
+@supabase_retry()
 def set_analysis_video_storage_path(*, analysis_id: str, video_storage_path: str) -> None:
     """
     Point analyses.video_storage_path at a Storage object (e.g. H.264 playback.mp4 after worker normalize).
@@ -192,6 +252,7 @@ def set_analysis_video_storage_path(*, analysis_id: str, video_storage_path: str
         print(f"[Supabase] set_analysis_video_storage_path FAILED for {analysis_id}: {e}")
 
 
+@supabase_retry()
 def put_result_json(
     *,
     analysis_id: str,
@@ -291,6 +352,7 @@ _LIST_ANALYSES_COLUMNS_NO_RESULT = (
 )
 
 
+@supabase_retry()
 def list_analyses(limit: int = 200, *, include_result_json: bool = False) -> list[dict[str, Any]]:
     if not _configured():
         return []
@@ -323,6 +385,7 @@ def _escape_ilike_exact(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+@supabase_retry()
 def list_analyses_by_channel(channel_name: str, *, include_result_json: bool = True) -> list[dict[str, Any]]:
     """
     All analyses for a channel_name match (case-insensitive, trimmed), oldest first.
@@ -384,6 +447,7 @@ def list_analyses_by_channel(channel_name: str, *, include_result_json: bool = T
             return []
 
 
+@supabase_retry()
 def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
     """
     Group Supabase analyses by channel_name (case-insensitive key).
@@ -479,6 +543,7 @@ def aggregate_analyses_by_channel_name() -> dict[str, dict[str, Any]]:
     return out
 
 
+@supabase_retry()
 def get_analysis(analysis_id: str) -> dict[str, Any] | None:
     if not _configured():
         return None
@@ -496,6 +561,7 @@ def get_analysis(analysis_id: str) -> dict[str, Any] | None:
         return None
 
 
+@supabase_retry()
 def get_result(analysis_id: str) -> dict[str, Any] | None:
     if not _configured():
         return None
@@ -535,6 +601,7 @@ def get_result(analysis_id: str) -> dict[str, Any] | None:
     return None
 
 
+@supabase_retry()
 def upload_file_to_storage(*, local_path: str, storage_path: str, content_type: str | None = None) -> str:
     if not _configured():
         return storage_path
@@ -556,6 +623,7 @@ def upload_file_to_storage(*, local_path: str, storage_path: str, content_type: 
     return storage_path
 
 
+@supabase_retry()
 def download_file_from_storage(*, storage_path: str) -> bytes:
     if not _configured():
         raise RuntimeError("Supabase is not configured")
@@ -569,6 +637,7 @@ def download_file_from_storage(*, storage_path: str) -> bytes:
     return bytes(data)
 
 
+@supabase_retry()
 def create_comparison_report(*, left_analysis_id: str, right_analysis_id: str, report: dict[str, Any]) -> str:
     if not _configured():
         return str(uuid.uuid4())

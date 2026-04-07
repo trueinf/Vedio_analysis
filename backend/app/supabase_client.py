@@ -2,11 +2,51 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from functools import wraps
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _client = None
+
+
+def reset_supabase_client() -> None:
+    global _client
+    _client = None
+
+
+def _is_retryable_transport_error(e: Exception) -> bool:
+    s = str(e)
+    needles = ("Broken pipe", "Connection reset", "ConnectionError", "BrokenPipeError", "ReadTimeout")
+    return any(n in s for n in needles)
+
+
+def supabase_retry(max_attempts: int = 3, delay: float = 0.5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error: Exception | None = None
+            for attempt in range(int(max_attempts or 3)):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if _is_retryable_transport_error(e) and attempt < int(max_attempts or 3) - 1:
+                        try:
+                            reset_supabase_client()
+                        except Exception:
+                            pass
+                        time.sleep(float(delay) * (attempt + 1))
+                        continue
+                    raise
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("Supabase retry failed without exception")
+
+        return wrapper
+
+    return decorator
 
 
 def get_supabase_client():
@@ -188,6 +228,7 @@ def list_events_for_analysis_uuid(analysis_uuid: str, limit: int = 5000) -> list
         logger.warning("[Supabase] list_events_for_analysis_uuid failed: %s", e)
         return []
 
+list_events_for_analysis_uuid = supabase_retry()(list_events_for_analysis_uuid)
 
 def get_result_json_for_job(job_id: str) -> dict[str, Any] | None:
     """Prefer analysis_results row; fall back to analyses.result_json."""
@@ -220,6 +261,7 @@ def get_result_json_for_job(job_id: str) -> dict[str, Any] | None:
         logger.warning("[Supabase] get_result_json_for_job failed: %s", e)
     return None
 
+get_result_json_for_job = supabase_retry()(get_result_json_for_job)
 
 def get_analysis_by_job_id(job_id: str) -> dict[str, Any] | None:
     client = get_supabase_client()
@@ -232,6 +274,7 @@ def get_analysis_by_job_id(job_id: str) -> dict[str, Any] | None:
     except Exception:
         return None
 
+get_analysis_by_job_id = supabase_retry()(get_analysis_by_job_id)
 
 def list_analyses(limit: int = 50, offset: int = 0, status: str = "") -> list[dict[str, Any]]:
     client = get_supabase_client()
@@ -255,6 +298,7 @@ def list_analyses(limit: int = 50, offset: int = 0, status: str = "") -> list[di
         print(f"[Supabase] list_analyses failed: {e}")
         return []
 
+list_analyses = supabase_retry()(list_analyses)
 
 def store_comparison(
     source_job_id: str,
@@ -296,4 +340,6 @@ def store_comparison(
     except Exception as e:
         print(f"[Supabase] store_comparison failed: {e}")
         return None
+
+store_comparison = supabase_retry()(store_comparison)
 
