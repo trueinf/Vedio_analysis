@@ -97,6 +97,7 @@ export default function ProcessPage() {
   const [youtubeFieldError, setYoutubeFieldError] = useState<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const reportSectionRef = useRef<HTMLDivElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
 
@@ -116,6 +117,29 @@ export default function ProcessPage() {
       .then((d) => setChannelList(d.channels || []))
       .catch(() => setChannelList([]));
   }, []);
+
+  useEffect(() => {
+    uploadedJobsRef.current = uploadedJobs;
+  }, [uploadedJobs]);
+
+  /** First completed job opens the inline report once when nothing is selected yet. */
+  useEffect(() => {
+    if (hasAutoOpenedReportRef.current) return;
+    if (activeReportId != null) return;
+    const firstDone = uploadedJobs.find(
+      (j) => j.status === "completed" && !String(j.id).startsWith("uploading-")
+    );
+    if (!firstDone) return;
+    setActiveReportId(firstDone.id);
+    hasAutoOpenedReportRef.current = true;
+  }, [uploadedJobs, activeReportId]);
+
+  useEffect(() => {
+    if (!activeReportId) return;
+    requestAnimationFrame(() => {
+      reportSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [activeReportId]);
 
   useEffect(() => {
     if (uploadMode === "file") setYoutubeFieldError("");
@@ -458,7 +482,7 @@ export default function ProcessPage() {
         ) : null}
 
         {activeReportId ? (
-          <div className="mt-10 max-w-7xl mx-auto">
+          <div ref={reportSectionRef} className="mt-10 max-w-7xl mx-auto scroll-mt-6">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-1">
               <div className="text-sm font-medium text-white">
                 Report:{" "}

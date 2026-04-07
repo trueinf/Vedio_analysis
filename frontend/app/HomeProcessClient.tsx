@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { AnalysisReport } from "@/components/AnalysisReport";
 import { getJobProgressUnified, uploadVideo } from "../lib/api";
 import { VideoDropzone } from "@/components/VideoDropzone";
 
@@ -20,11 +20,37 @@ export default function HomeProcessClient() {
   const [channelName, setChannelName] = useState("");
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [activeReportId, setActiveReportId] = useState<string | null>(null);
+  const jobsRef = useRef<JobRow[]>([]);
+  const hasAutoOpenedReportRef = useRef(false);
+  const reportSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const active = jobs.filter((j) => j.status === "queued" || j.status === "processing");
-    if (!active.length) return;
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  /** First job that reaches completed opens the inline report once (if nothing selected yet). */
+  useEffect(() => {
+    if (hasAutoOpenedReportRef.current) return;
+    if (activeReportId != null) return;
+    const firstDone = jobs.find((j) => j.status === "completed");
+    if (!firstDone) return;
+    setActiveReportId(firstDone.id);
+    hasAutoOpenedReportRef.current = true;
+  }, [jobs, activeReportId]);
+
+  useEffect(() => {
+    if (!activeReportId) return;
+    requestAnimationFrame(() => {
+      reportSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [activeReportId]);
+
+  useEffect(() => {
     const t = setInterval(async () => {
+      const cur = jobsRef.current;
+      const active = cur.filter((j) => j.status === "queued" || j.status === "processing");
+      if (!active.length) return;
       const updates = await Promise.all(
         active.map(async (row) => {
           try {
@@ -50,15 +76,13 @@ export default function HomeProcessClient() {
       );
     }, 3000);
     return () => clearInterval(t);
-  }, [jobs]);
+  }, []);
 
   async function handleUpload() {
     if (!files.length) return;
     setUploading(true);
     try {
       const newRows: JobRow[] = [];
-      // One file per request (same strategy as /process). A single multipart /batch with many
-      // large videos often hits Railway/proxy timeouts (502) — the browser then shows a misleading CORS error.
       for (const f of files) {
         const u = await uploadVideo(f, channelName);
         newRows.push({ id: u.job_id, name: f.name, status: u.status, stage: "queued", progress: 0 });
@@ -117,12 +141,17 @@ export default function HomeProcessClient() {
                   <div className="flex items-center gap-3 shrink-0 ml-4">
                     <span className="text-xs text-slate-400">{job.stage || job.status}</span>
                     {job.status === "completed" ? (
-                      <Link
-                        href={`/dashboard?highlight=${job.id}`}
-                        className="text-xs text-cyan-400 hover:text-cyan-300 font-medium"
+                      <button
+                        type="button"
+                        onClick={() => setActiveReportId(job.id)}
+                        className={`text-xs font-medium rounded-md px-2 py-1 transition-colors ${
+                          activeReportId === job.id
+                            ? "text-cyan-200 bg-cyan-400/20 border border-cyan-400/40"
+                            : "text-cyan-400 hover:text-cyan-300 border border-transparent hover:border-cyan-400/30"
+                        }`}
                       >
-                        View in Dashboard →
-                      </Link>
+                        {activeReportId === job.id ? "Report open" : "View report"}
+                      </button>
                     ) : null}
                   </div>
                 </div>
@@ -142,6 +171,38 @@ export default function HomeProcessClient() {
               </div>
             ))}
           </div>
+        </div>
+      ) : null}
+
+      {activeReportId ? (
+        <div ref={reportSectionRef} className="mt-10 scroll-mt-6 max-w-7xl mx-auto">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-1">
+            <div className="text-sm font-medium text-white">
+              Report:{" "}
+              <span className="text-slate-200">
+                {jobs.find((j) => j.id === activeReportId)?.name ?? activeReportId}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a
+                href={`/video/${activeReportId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-cyan-300 hover:underline"
+              >
+                Open full page ↗
+              </a>
+              <button
+                type="button"
+                aria-label="Close report"
+                className="rounded-lg border border-white/15 px-2.5 py-1 text-sm text-slate-200 hover:bg-white/10"
+                onClick={() => setActiveReportId(null)}
+              >
+                ✕ Close
+              </button>
+            </div>
+          </div>
+          <AnalysisReport key={activeReportId} analysisId={activeReportId} embedded />
         </div>
       ) : null}
     </>
