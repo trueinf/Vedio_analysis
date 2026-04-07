@@ -480,15 +480,15 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       ) : null}
 
       {loading ? (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6 ${embedded ? "" : ""}`}>
-          <div className="lg:col-span-8 bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
-          <div className="lg:col-span-4 bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
+        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6`}>
+          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
+          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
         </div>
       ) : err ? (
         <div className="mt-8 text-red-300 text-sm">{err}</div>
       ) : (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-12 gap-6`}>
-          <div className="lg:col-span-8 space-y-6">
+        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6`}>
+          <div className="space-y-6 min-w-0">
             <div ref={playerSectionRef} className="scroll-mt-6">
             <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">
               <div className="flex items-center justify-between gap-3 mb-3">
@@ -588,7 +588,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
             <MomentsPanel worstMoments={worstMoments} bestMoments={bestMoments} onSeek={(t0, _t1) => seekTo(t0, { scrollIntoView: true })} />
           </div>
 
-          <div className="lg:col-span-4 space-y-6">
+          <div className="space-y-6">
             <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold">AI Coach</div>

@@ -377,7 +377,7 @@ export default function ProcessPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white">
-      <div className="max-w-[96vw] mx-auto px-6 py-6">
+      <div className="max-w-7xl mx-auto px-6 py-6">
         <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 backdrop-blur px-4 py-3">
           <div>
             <div className="font-semibold tracking-tight text-3xl">Process</div>
@@ -393,192 +393,178 @@ export default function ProcessPage() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-12 gap-6">
-          <div className="col-span-12 lg:col-span-7">
-            <VideoUploadPanel
-              jobId={jobId}
-              localVideoUrl={localVideoUrl}
-              demoMode={false}
-              channelName={channelName}
-              onChannelNameChange={setChannelName}
-              youtubeUrl={youtubeUrl}
-              onYoutubeUrlChange={setYoutubeUrl}
-              ytIngest={null}
-              ytIngesting={false}
-              uploadMode={uploadMode}
-              onUploadModeChange={(m) => {
-                setUploadMode(m);
-                if (m === "file") {
-                  setYoutubeUrl("");
-                  setYoutubeFieldError("");
-                } else {
-                  setFiles([]);
-                  setFile(null);
-                }
-              }}
-              channels={channelList.map((c) => ({ id: c.id, name: c.name }))}
-              channelId={channelId}
-              onChannelIdChange={setChannelId}
-              youtubeFieldError={youtubeFieldError}
-              onPickFiles={(picked) => {
-                setFiles(picked);
-                setFile(picked[0] ?? null);
-              }}
-              onAnalyze={startUpload}
-              onRefresh={refreshSelected}
-              onClearHistory={clearHistory}
-              canAnalyze={canAnalyze}
-              canRefresh={Boolean(jobId) && !busy}
-              selectedFilesCount={files.length}
-              status={status}
-              stage={stage}
-              progress={progress}
-              jobError={jobError}
-              uploadedJobs={uploadedJobs}
-              activeJobId={jobId}
-              onSelectJob={(nextJobId) => setJobId(nextJobId)}
-              setVideoRef={(el) => {
-                videoRef.current = el;
-              }}
-              onVideoLoadedMetadata={(duration) => setVideoDuration(duration)}
-              onVideoTimeUpdate={(time) => setCurrentTime(time)}
-              hideJobHistoryTable
-            />
-          </div>
-
-          <Card className="col-span-12 lg:col-span-5 p-4 bg-white/5 border border-white/10 backdrop-blur text-white">
-            <div className="text-sm font-semibold">What happens next?</div>
-            <div className="mt-2 text-sm text-slate-300">
-              After analysis completes, your full result is saved to Supabase and will appear in the Dashboard.
-            </div>
-            <div className="mt-4 flex gap-2">
-              <Button variant="premium-ghost" onClick={() => (window.location.href = "/dashboard")}>
-                Open Dashboard
-              </Button>
-              <Button variant="premium-ghost" onClick={() => (window.location.href = "/compare")}>
-                Open Compare
-              </Button>
-            </div>
-            <div className="mt-4 text-xs text-slate-400">
-              Player time: {Math.floor(currentTime)}s · Duration: {Math.floor(videoDuration)}s
-            </div>
-          </Card>
-        </div>
-
+        {/* When results are showing, use full-width two columns:
+            Left = upload + queue, Right = live report */}
         {uploadedJobs.length > 0 ? (
-          <div className="mt-8 space-y-6">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Analysis Queue</div>
-              <Button variant="premium-ghost" onClick={clearHistory}>
-                Clear history
-              </Button>
-            </div>
+          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-6">
+              <VideoUploadPanel
+                jobId={jobId}
+                localVideoUrl={localVideoUrl}
+                demoMode={false}
+                channelName={channelName}
+                onChannelNameChange={setChannelName}
+                youtubeUrl={youtubeUrl}
+                onYoutubeUrlChange={setYoutubeUrl}
+                ytIngest={null}
+                ytIngesting={false}
+                uploadMode={uploadMode}
+                onUploadModeChange={(m) => {
+                  setUploadMode(m);
+                  if (m === "file") {
+                    setYoutubeUrl("");
+                    setYoutubeFieldError("");
+                  } else {
+                    setFiles([]);
+                    setFile(null);
+                  }
+                }}
+                channels={channelList.map((c) => ({ id: c.id, name: c.name }))}
+                channelId={channelId}
+                onChannelIdChange={setChannelId}
+                youtubeFieldError={youtubeFieldError}
+                onPickFiles={(picked) => {
+                  setFiles(picked);
+                  setFile(picked[0] ?? null);
+                }}
+                onAnalyze={startUpload}
+                onRefresh={refreshSelected}
+                onClearHistory={clearHistory}
+                canAnalyze={canAnalyze}
+                canRefresh={Boolean(jobId) && !busy}
+                selectedFilesCount={files.length}
+                status={status}
+                stage={stage}
+                progress={progress}
+                jobError={jobError}
+                uploadedJobs={uploadedJobs}
+                activeJobId={jobId}
+                onSelectJob={(nextJobId) => setJobId(nextJobId)}
+                setVideoRef={(el) => {
+                  videoRef.current = el;
+                }}
+                onVideoLoadedMetadata={(duration) => setVideoDuration(duration)}
+                onVideoTimeUpdate={(time) => setCurrentTime(time)}
+                hideJobHistoryTable
+              />
 
-            <Card className="p-4 bg-white/5 border border-white/10 backdrop-blur text-white rounded-2xl">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm text-slate-300">Processing: <span className="text-white font-semibold">{activeBatchChannelName || channelName || "Channel"}</span></div>
-                  <div className="mt-1 text-xs text-slate-400">
-                    {(() => {
-                      const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
-                      const total = rows.length;
-                      const completed = rows.filter((j) => j.status === "completed").length;
-                      const processing = rows.filter((j) => j.status === "processing").length;
-                      const queued = rows.filter((j) => j.status === "queued").length;
-                      const failed = rows.filter((j) => j.status === "failed").length;
-                      return `${completed} of ${total} completed · ${processing} processing · ${queued} queued${failed ? ` · ${failed} failed` : ""}`;
-                    })()}
-                  </div>
+              {/* Queue */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Analysis Queue</div>
+                  <Button variant="premium-ghost" onClick={clearHistory}>
+                    Clear history
+                  </Button>
                 </div>
-                <div className="text-right">
-                  {(() => {
-                    const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
-                    const total = rows.length || 1;
-                    const prog = rows.reduce((s, j) => {
-                      if (j.status === "completed" || j.status === "failed") return s + 1;
-                      return s + Math.max(0, Math.min(1, Number(j.progress || 0)));
-                    }, 0);
-                    const pct = Math.round((prog / total) * 100);
-                    return <div className="text-xs text-slate-300 tabular-nums">{pct}%</div>;
-                  })()}
-                </div>
-              </div>
 
-              <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-cyan-400 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.max(
-                      3,
-                      (() => {
+                <Card className="p-4 bg-white/5 border border-white/10 backdrop-blur text-white rounded-2xl">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm text-slate-300">
+                        Processing:{" "}
+                        <span className="text-white font-semibold">{activeBatchChannelName || channelName || "Channel"}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {(() => {
+                          const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
+                          const total = rows.length;
+                          const completed = rows.filter((j) => j.status === "completed").length;
+                          const processing = rows.filter((j) => j.status === "processing").length;
+                          const queued = rows.filter((j) => j.status === "queued").length;
+                          const failed = rows.filter((j) => j.status === "failed").length;
+                          return `${completed} of ${total} completed · ${processing} processing · ${queued} queued${failed ? ` · ${failed} failed` : ""}`;
+                        })()}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      {(() => {
                         const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
                         const total = rows.length || 1;
                         const prog = rows.reduce((s, j) => {
                           if (j.status === "completed" || j.status === "failed") return s + 1;
                           return s + Math.max(0, Math.min(1, Number(j.progress || 0)));
                         }, 0);
-                        return Math.round((prog / total) * 100);
-                      })()
-                    )}%`,
-                  }}
-                />
-              </div>
+                        const pct = Math.round((prog / total) * 100);
+                        return <div className="text-xs text-slate-300 tabular-nums">{pct}%</div>;
+                      })()}
+                    </div>
+                  </div>
 
-              <div className="mt-4">
-                <div className="text-xs text-slate-400 mb-2">Individual file status</div>
-                <div className="space-y-2">
-                  {uploadedJobs.map((j) => {
-                    const isTemp = String(j.id).startsWith("uploading-");
-                    const dot =
-                      j.status === "completed"
-                        ? "bg-emerald-400"
-                        : j.status === "failed"
-                          ? "bg-red-400"
-                          : j.status === "processing"
-                            ? "bg-cyan-400 animate-pulse"
-                            : "bg-amber-400";
-                    return (
-                      <div
-                        key={j.id}
-                        className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
-                      >
-                        <div className="min-w-0 flex items-center gap-2">
-                          <span className={`shrink-0 w-2 h-2 rounded-full ${dot}`} />
-                          <div className="min-w-0">
-                            <div className="text-xs text-white truncate" title={j.name}>
-                              {truncateFilename(j.name)}
+                  <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-400 rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.max(
+                          3,
+                          (() => {
+                            const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
+                            const total = rows.length || 1;
+                            const prog = rows.reduce((s, j) => {
+                              if (j.status === "completed" || j.status === "failed") return s + 1;
+                              return s + Math.max(0, Math.min(1, Number(j.progress || 0)));
+                            }, 0);
+                            return Math.round((prog / total) * 100);
+                          })()
+                        )}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="text-xs text-slate-400 mb-2">Individual file status</div>
+                    <div className="space-y-2">
+                      {uploadedJobs.map((j) => {
+                        const isTemp = String(j.id).startsWith("uploading-");
+                        const dot =
+                          j.status === "completed"
+                            ? "bg-emerald-400"
+                            : j.status === "failed"
+                              ? "bg-red-400"
+                              : j.status === "processing"
+                                ? "bg-cyan-400 animate-pulse"
+                                : "bg-amber-400";
+                        return (
+                          <div
+                            key={j.id}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex items-center gap-2">
+                              <span className={`shrink-0 w-2 h-2 rounded-full ${dot}`} />
+                              <div className="min-w-0">
+                                <div className="text-xs text-white truncate" title={j.name}>
+                                  {truncateFilename(j.name)}
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  {j.stage || j.status}
+                                  {j.status === "processing" || j.status === "queued"
+                                    ? ` · ${Math.round((j.progress || 0) * 100)}%`
+                                    : ""}
+                                </div>
+                              </div>
                             </div>
-                            <div className="text-[11px] text-slate-500">
-                              {j.stage || j.status}
-                              {j.status === "processing" || j.status === "queued"
-                                ? ` · ${Math.round((j.progress || 0) * 100)}%`
-                                : ""}
+                            <div className="shrink-0 text-right">
+                              {j.status === "completed" && !isTemp ? (
+                                <div className="text-[11px] text-slate-300 tabular-nums">
+                                  confidence: <span className="text-slate-100 font-medium">{j.confidence ?? "—"}</span>
+                                </div>
+                              ) : j.status === "failed" ? (
+                                <div className="text-[11px] text-red-300">failed</div>
+                              ) : (
+                                <div className="text-[11px] text-slate-500">—</div>
+                              )}
                             </div>
                           </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          {j.status === "completed" && !isTemp ? (
-                            <div className="text-[11px] text-slate-300 tabular-nums">
-                              confidence:{" "}
-                              <span className="text-slate-100 font-medium">{j.confidence ?? "—"}</span>
-                            </div>
-                          ) : j.status === "failed" ? (
-                            <div className="text-[11px] text-red-300">failed</div>
-                          ) : (
-                            <div className="text-[11px] text-slate-500">—</div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </Card>
               </div>
-            </Card>
+            </div>
 
+            {/* Right column: Live report */}
             <div ref={liveReportSectionRef} className="scroll-mt-6">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-3">
-                Live Channel Report
-              </div>
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-3">Live Channel Report</div>
               {activeBatchChannelName.trim() ? (
                 <div className="rounded-2xl border border-white/10 bg-white/5">
                   <ChannelReportClient
@@ -591,7 +577,80 @@ export default function ProcessPage() {
               )}
             </div>
           </div>
-        ) : null}
+        ) : (
+          <div className="mt-6 grid grid-cols-12 gap-6">
+            <div className="col-span-12 lg:col-span-7">
+              <VideoUploadPanel
+                jobId={jobId}
+                localVideoUrl={localVideoUrl}
+                demoMode={false}
+                channelName={channelName}
+                onChannelNameChange={setChannelName}
+                youtubeUrl={youtubeUrl}
+                onYoutubeUrlChange={setYoutubeUrl}
+                ytIngest={null}
+                ytIngesting={false}
+                uploadMode={uploadMode}
+                onUploadModeChange={(m) => {
+                  setUploadMode(m);
+                  if (m === "file") {
+                    setYoutubeUrl("");
+                    setYoutubeFieldError("");
+                  } else {
+                    setFiles([]);
+                    setFile(null);
+                  }
+                }}
+                channels={channelList.map((c) => ({ id: c.id, name: c.name }))}
+                channelId={channelId}
+                onChannelIdChange={setChannelId}
+                youtubeFieldError={youtubeFieldError}
+                onPickFiles={(picked) => {
+                  setFiles(picked);
+                  setFile(picked[0] ?? null);
+                }}
+                onAnalyze={startUpload}
+                onRefresh={refreshSelected}
+                onClearHistory={clearHistory}
+                canAnalyze={canAnalyze}
+                canRefresh={Boolean(jobId) && !busy}
+                selectedFilesCount={files.length}
+                status={status}
+                stage={stage}
+                progress={progress}
+                jobError={jobError}
+                uploadedJobs={uploadedJobs}
+                activeJobId={jobId}
+                onSelectJob={(nextJobId) => setJobId(nextJobId)}
+                setVideoRef={(el) => {
+                  videoRef.current = el;
+                }}
+                onVideoLoadedMetadata={(duration) => setVideoDuration(duration)}
+                onVideoTimeUpdate={(time) => setCurrentTime(time)}
+                hideJobHistoryTable
+              />
+            </div>
+
+            <Card className="col-span-12 lg:col-span-5 p-4 bg-white/5 border border-white/10 backdrop-blur text-white">
+              <div className="text-sm font-semibold">What happens next?</div>
+              <div className="mt-2 text-sm text-slate-300">
+                After analysis completes, your full result is saved to Supabase and will appear in the Dashboard.
+              </div>
+              <div className="mt-4 flex gap-2">
+                <Button variant="premium-ghost" onClick={() => (window.location.href = "/dashboard")}>
+                  Open Dashboard
+                </Button>
+                <Button variant="premium-ghost" onClick={() => (window.location.href = "/compare")}>
+                  Open Compare
+                </Button>
+              </div>
+              <div className="mt-4 text-xs text-slate-400">
+                Player time: {Math.floor(currentTime)}s · Duration: {Math.floor(videoDuration)}s
+              </div>
+            </Card>
+          </div>
+        )}
+
       </div>
     </div>
   );

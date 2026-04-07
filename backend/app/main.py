@@ -1023,8 +1023,8 @@ def create_app() -> FastAPI:
         except RuntimeError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         except Exception as e:
-            logger.exception("channel_ai_summary_post failed")
-            raise HTTPException(status_code=500, detail="Could not generate summary") from e
+            logger.error(f"OpenAI error: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     @app.get("/api/channels/{channel_name}/analyses")
     def channel_analyses_list(channel_name: str, include_result: bool = True) -> dict:

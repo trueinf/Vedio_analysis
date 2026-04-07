@@ -167,6 +167,9 @@ export default function ChannelReportClient(props: { encodedName: string }) {
   const [aiSummaryLoading, setAiSummaryLoading] = useState(true);
   const [aiSummaryError, setAiSummaryError] = useState("");
 
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
   const [latestResult, setLatestResult] = useState<any>(null);
   const [latestDurationSec, setLatestDurationSec] = useState<number>(0);
@@ -657,44 +660,50 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
               <div className="text-xs text-slate-400 mb-2">Confidence</div>
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trendPoints}>
-                    <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <Tooltip {...chartTooltip} />
-                    <ReferenceLine y={avgConfLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="confidence" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+              <div style={{ width: "100%", minHeight: 200 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={trendPoints}>
+                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <Tooltip {...chartTooltip} />
+                      <ReferenceLine y={avgConfLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
+                      <Line type="monotone" dataKey="confidence" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : null}
               </div>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
               <div className="text-xs text-slate-400 mb-2">Energy</div>
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trendPoints}>
-                    <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <Tooltip {...chartTooltip} />
-                    <ReferenceLine y={avgEnergyLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="energy" stroke="#34d399" strokeWidth={2} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+              <div style={{ width: "100%", minHeight: 200 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={trendPoints}>
+                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <Tooltip {...chartTooltip} />
+                      <ReferenceLine y={avgEnergyLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
+                      <Line type="monotone" dataKey="energy" stroke="#34d399" strokeWidth={2} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : null}
               </div>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
               <div className="text-xs text-slate-400 mb-2">WPM</div>
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trendPoints}>
-                    <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <YAxis domain={[0, 200]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <Tooltip {...chartTooltip} />
-                    <ReferenceLine y={avgWpmLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="wpm" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+              <div style={{ width: "100%", minHeight: 200 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={trendPoints}>
+                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <YAxis domain={[0, 200]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
+                      <Tooltip {...chartTooltip} />
+                      <ReferenceLine y={avgWpmLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
+                      <Line type="monotone" dataKey="wpm" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : null}
               </div>
             </div>
           </div>
