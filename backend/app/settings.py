@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     cors_origins: str = (
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:3001,http://127.0.0.1:3001,"
-        "https://vedioanalysis.netlify.app,https://videoanalysis.netlify.app"
+        "https://vedioanalysis.netlify.app,https://www.vedioanalysis.netlify.app,"
+        "https://videoanalysis.netlify.app,https://www.videoanalysis.netlify.app"
     )
     cors_origin_regex: str = r"^https://.*\.netlify\.app$"
     # When True, allow any origin (use with allow_credentials=False). Set CORS_ALLOW_ALL=true on Railway if needed.

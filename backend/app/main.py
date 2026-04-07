@@ -311,20 +311,33 @@ def create_app() -> FastAPI:
 
     app = FastAPI(default_response_class=ORJSONResponse, title=settings.app_name)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "https://vedioanalysis.netlify.app",
-            "https://www.vedioanalysis.netlify.app",
-            "http://localhost:3000",
-            "http://localhost:3001",
-        ],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-        max_age=3600,
-    )
+    # CORS must match the browser origin (e.g. videoanalysis vs vedioanalysis.netlify.app). Use settings + regex
+    # so all Netlify preview/production HTTPS hosts work; do not hardcode a single typo'd hostname here.
+    _cors_origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
+    if not _cors_origins:
+        _cors_origins = ["http://localhost:3000", "http://localhost:3001"]
+    _cors_regex = (settings.cors_origin_regex or "").strip() or None
+    if settings.cors_allow_all:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["*"],
+            max_age=3600,
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=_cors_origins,
+            allow_origin_regex=_cors_regex,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["*"],
+            max_age=3600,
+        )
 
     # Best-effort recovery: if the server was restarted mid-job (thread-based worker),
     # move stale processing jobs back to queued so they can be retried.

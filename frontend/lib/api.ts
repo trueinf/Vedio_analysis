@@ -6,6 +6,10 @@ function getApiBase(): string {
   // Common misconfig: user sets .../api/jobs — strip so we don't double paths.
   b = b.replace(/\/api\/jobs\/?$/i, "");
   b = b.replace(/\/api\/?$/i, "");
+  // Mistaken paste of a page path or single endpoint (would break all /api/* calls).
+  b = b.replace(/\/dashboard\/?$/i, "");
+  b = b.replace(/\/api\/analyses\/?$/i, "");
+  b = b.replace(/\/analyses\/?$/i, "");
   return b;
 }
 
