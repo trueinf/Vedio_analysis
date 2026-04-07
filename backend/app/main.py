@@ -1038,6 +1038,232 @@ def create_app() -> FastAPI:
         rows = list_analyses_by_channel(name, include_result_json=include_result)
         return {"analyses": rows}
 
+    @app.get("/api/channels/{channel_name}/report")
+    def channel_report(channel_name: str) -> dict:
+        """
+        Aggregated channel report computed server-side from Supabase analyses rows for this channel_name.
+        Does NOT delete or modify Supabase rows.
+        """
+        name = (channel_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="channel name is required")
+        rows = list_analyses_by_channel(name, include_result_json=True)
+        if not rows:
+            return {
+                "channel_name": name,
+                "total_videos": 0,
+                "completed_videos": 0,
+                "avg_confidence": 0.0,
+                "avg_energy": 0.0,
+                "avg_wpm": 0.0,
+                "avg_eye_contact": 0.0,
+                "confidence_trend": None,
+                "recent_avg_confidence": None,
+                "previous_avg_confidence": None,
+                "top_coach_patterns": [],
+                "best_videos": [],
+                "worst_videos": [],
+                "confidence_over_time": [],
+                "individual_videos": [],
+            }
+
+        def _f(v) -> float | None:
+            try:
+                if v is None:
+                    return None
+                n = float(v)
+                return n if n == n else None
+            except Exception:
+                return None
+
+        def _round1(v: float | None) -> float | None:
+            return round(float(v), 1) if v is not None else None
+
+        total_videos = len(rows)
+        completed_rows = [r for r in rows if str(r.get("status") or "") == "completed"]
+        completed_videos = len(completed_rows)
+
+        confs = [_f(r.get("confidence_score")) for r in completed_rows]
+        engs = [_f(r.get("energy_score")) for r in completed_rows]
+        wpms = [_f(r.get("wpm")) for r in completed_rows]
+        eyes = [_f(r.get("eye_contact_ratio")) for r in completed_rows]
+        conf_vals = [v for v in confs if v is not None]
+        eng_vals = [v for v in engs if v is not None]
+        wpm_vals = [v for v in wpms if v is not None]
+        eye_vals = [v for v in eyes if v is not None]
+
+        avg_conf = _round1(float(statistics.mean(conf_vals))) if conf_vals else 0.0
+        avg_energy = _round1(float(statistics.mean(eng_vals))) if eng_vals else 0.0
+        avg_wpm = _round1(float(statistics.mean(wpm_vals))) if wpm_vals else 0.0
+        # Eye contact reported as percentage (0..100)
+        avg_eye_raw = float(statistics.mean(eye_vals)) if eye_vals else 0.0
+        avg_eye_pct = avg_eye_raw * 100.0 if avg_eye_raw <= 1.0 else avg_eye_raw
+        avg_eye_contact = _round1(avg_eye_pct) if completed_videos else 0.0
+
+        # Trend: latest 5 vs previous 5 by created_at desc (requires 10 scored videos)
+        scored_for_trend = [
+            r for r in completed_rows if _f(r.get("confidence_score")) is not None and str(r.get("created_at") or "").strip()
+        ]
+        scored_for_trend.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        latest_5 = scored_for_trend[:5]
+        prev_5 = scored_for_trend[5:10]
+        recent_avg_confidence = None
+        previous_avg_confidence = None
+        confidence_trend = None
+        if latest_5:
+            recent_avg_confidence = _round1(float(statistics.mean([float(r["confidence_score"]) for r in latest_5])))
+        if len(prev_5) >= 5:
+            previous_avg_confidence = _round1(float(statistics.mean([float(r["confidence_score"]) for r in prev_5])))
+        if recent_avg_confidence is not None and previous_avg_confidence is not None:
+            d = float(recent_avg_confidence) - float(previous_avg_confidence)
+            if d > 2:
+                confidence_trend = "improving"
+            elif d < -2:
+                confidence_trend = "declining"
+            else:
+                confidence_trend = "stable"
+
+        # Coach patterns: result_json.coach_comments[].comment grouped by text
+        counts: dict[str, int] = {}
+        for r in completed_rows:
+            rj = r.get("result_json")
+            if not isinstance(rj, dict):
+                continue
+            cc = rj.get("coach_comments")
+            if not isinstance(cc, list):
+                continue
+            for item in cc:
+                if not isinstance(item, dict):
+                    continue
+                t = str(item.get("comment") or "").strip()
+                if not t:
+                    continue
+                counts[t] = counts.get(t, 0) + 1
+        top_coach_patterns = [
+            {"comment": k, "count": int(v)}
+            for k, v in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        ]
+
+        # Best/Worst by confidence
+        scored = []
+        for r in completed_rows:
+            c = _f(r.get("confidence_score"))
+            if c is None:
+                continue
+            scored.append((float(c), r))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_videos = []
+        worst_videos = []
+        for c, r in scored[:3]:
+            best_videos.append(
+                {
+                    "filename": str(r.get("original_filename") or r.get("title") or r.get("job_id") or r.get("id") or ""),
+                    "confidence": _round1(c) if c is not None else None,
+                    "analysis_id": str(r.get("job_id") or r.get("id") or ""),
+                }
+            )
+        for c, r in list(reversed(scored))[:3]:
+            worst_videos.append(
+                {
+                    "filename": str(r.get("original_filename") or r.get("title") or r.get("job_id") or r.get("id") or ""),
+                    "confidence": _round1(c) if c is not None else None,
+                    "analysis_id": str(r.get("job_id") or r.get("id") or ""),
+                }
+            )
+
+        # Confidence over time: daily average (YYYY-MM-DD)
+        by_day: dict[str, list[float]] = {}
+        for r in completed_rows:
+            c = _f(r.get("confidence_score"))
+            if c is None:
+                continue
+            ca = str(r.get("created_at") or "")
+            if not ca:
+                continue
+            day = ca[:10]
+            by_day.setdefault(day, []).append(float(c))
+        confidence_over_time = [
+            {"date": day, "value": _round1(float(statistics.mean(vals)))}
+            for day, vals in sorted(by_day.items(), key=lambda kv: kv[0])
+            if vals
+        ]
+
+        # Individual videos (newest first)
+        ind = completed_rows[:]
+        ind.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+
+        def _metric_from_rj(rj: dict, path: list[str]) -> float | None:
+            cur = rj
+            for k in path:
+                if not isinstance(cur, dict) or k not in cur:
+                    return None
+                cur = cur.get(k)
+            return _f(cur)
+
+        individual_videos = []
+        for r in ind:
+            analysis_id = str(r.get("job_id") or r.get("id") or "")
+            filename = str(r.get("original_filename") or r.get("title") or analysis_id)
+            created_at = str(r.get("created_at") or "")
+            conf = _round1(_f(r.get("confidence_score")))
+            energy = _round1(_f(r.get("energy_score")))
+            eye_ratio = _f(r.get("eye_contact_ratio"))
+            eye_pct = None
+            if eye_ratio is not None:
+                eye_pct = _round1(eye_ratio * 100.0 if eye_ratio <= 1.0 else eye_ratio)
+            wpm = _round1(_f(r.get("wpm")))
+
+            fillers = _round1(_f(r.get("fillers_per_min")))
+            gestures = _round1(_f(r.get("gestures_per_min")))
+            tonal = None
+            expr = None
+            rj = r.get("result_json") if isinstance(r.get("result_json"), dict) else None
+            if rj:
+                tonal = _round1(
+                    _metric_from_rj(rj, ["cards", "tonal_variation", "score"])
+                    or _metric_from_rj(rj, ["cards", "tonal_variation", "pitch_hz", "std"])
+                )
+                expr_count = _metric_from_rj(rj, ["cards", "expressions", "change_count"])
+                dur = _f(r.get("duration_sec")) or _metric_from_rj(rj, ["summary", "duration_sec"]) or 0.0
+                if expr_count is not None and dur and dur > 0:
+                    expr = _round1(float(expr_count) / (float(dur) / 60.0))
+
+            individual_videos.append(
+                {
+                    "analysis_id": analysis_id,
+                    "filename": filename,
+                    "confidence_score": conf,
+                    "energy_score": energy,
+                    "eye_contact_ratio": eye_pct,
+                    "created_at": created_at,
+                    "metrics": {
+                        "speech_rate_wpm": wpm,
+                        "filler_rate": fillers,
+                        "gesture_rate": gestures,
+                        "tonal_variation": tonal,
+                        "expression_change": expr,
+                    },
+                }
+            )
+
+        return {
+            "channel_name": name,
+            "total_videos": int(total_videos),
+            "completed_videos": int(completed_videos),
+            "avg_confidence": avg_conf,
+            "avg_energy": avg_energy,
+            "avg_wpm": avg_wpm,
+            "avg_eye_contact": avg_eye_contact,
+            "confidence_trend": confidence_trend,
+            "recent_avg_confidence": recent_avg_confidence,
+            "previous_avg_confidence": previous_avg_confidence,
+            "top_coach_patterns": top_coach_patterns,
+            "best_videos": best_videos,
+            "worst_videos": worst_videos,
+            "confidence_over_time": confidence_over_time,
+            "individual_videos": individual_videos,
+        }
+
     @app.get("/api/channels/{channel_id}/collections", response_model=ChannelCollectionsOut)
     def channel_collections(channel_id: str, db: Session = Depends(get_db)) -> ChannelCollectionsOut:
         ch = db.get(Channel, channel_id)

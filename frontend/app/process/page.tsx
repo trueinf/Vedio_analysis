@@ -2,16 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Card } from "../../components/ui";
-import { AnalysisReport } from "../../components/AnalysisReport";
 import { isValidYouTubeVideoUrl, VideoUploadPanel } from "../../components/VideoUploadPanel";
 import {
   createYouTubeJobWithChannel,
   getAnalysisDetail,
   getJobProgressUnified,
   listChannels,
+  listAnalysesForChannel,
   uploadVideo,
 } from "../../lib/api";
-import type { ChannelItem } from "../../lib/api";
+import type { AnalysisRow, ChannelItem } from "../../lib/api";
+import ChannelReportClient from "../channel/[name]/ChannelReportClient";
 
 type UploadJobRow = {
   id: string;
@@ -23,7 +24,9 @@ type UploadJobRow = {
   confidence?: number | null;
 };
 
-function truncateFilename(name: string, max = 20): string {
+type ChannelAnalyses = { analyses: AnalysisRow[] };
+
+function truncateFilename(name: string, max = 34): string {
   const n = name || "";
   if (n.length <= max) return n;
   return `${n.slice(0, max)}…`;
@@ -77,10 +80,8 @@ export default function ProcessPage() {
   const [file, setFile] = useState<File | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedJobs, setUploadedJobs] = useState<UploadJobRow[]>([]);
-  const [activeReportId, setActiveReportId] = useState<string | null>(null);
   const uploadedJobsRef = useRef<UploadJobRow[]>([]);
   const confidenceFetchedRef = useRef<Set<string>>(new Set());
-  const hasAutoOpenedReportRef = useRef(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("");
   const [stage, setStage] = useState<string>("");
@@ -90,6 +91,7 @@ export default function ProcessPage() {
   const uploadInFlightRef = useRef(false);
 
   const [channelName, setChannelName] = useState<string>("");
+  const [activeBatchChannelName, setActiveBatchChannelName] = useState<string>("");
   const [youtubeUrl, setYoutubeUrl] = useState<string>("");
   const [uploadMode, setUploadMode] = useState<"file" | "youtube">("file");
   const [channelId, setChannelId] = useState<string>("");
@@ -97,9 +99,14 @@ export default function ProcessPage() {
   const [youtubeFieldError, setYoutubeFieldError] = useState<string>("");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const reportSectionRef = useRef<HTMLDivElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
+
+  const [liveChannelData, setLiveChannelData] = useState<ChannelAnalyses | null>(null);
+  const liveReportNonceRef = useRef(0);
+  const [liveReportNonce, setLiveReportNonce] = useState(0);
+  const lastStatusesRef = useRef<Map<string, string>>(new Map());
+  const liveReportSectionRef = useRef<HTMLDivElement | null>(null);
 
   const localVideoUrl = useMemo(() => {
     const pick = file ?? files[0] ?? null;
@@ -122,24 +129,34 @@ export default function ProcessPage() {
     uploadedJobsRef.current = uploadedJobs;
   }, [uploadedJobs]);
 
-  /** First completed job opens the inline report once when nothing is selected yet. */
-  useEffect(() => {
-    if (hasAutoOpenedReportRef.current) return;
-    if (activeReportId != null) return;
-    const firstDone = uploadedJobs.find(
-      (j) => j.status === "completed" && !String(j.id).startsWith("uploading-")
-    );
-    if (!firstDone) return;
-    setActiveReportId(firstDone.id);
-    hasAutoOpenedReportRef.current = true;
-  }, [uploadedJobs, activeReportId]);
+  const fetchLiveChannel = useCallback(
+    async (name: string) => {
+      const cn = (name || "").trim();
+      if (!cn) {
+        setLiveChannelData(null);
+        return;
+      }
+      try {
+        const data = await listAnalysesForChannel(cn, false);
+        setLiveChannelData({ analyses: data.analyses || [] });
+      } catch {
+        // Best-effort; report UI below still tries to load using ChannelReportClient.
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (!activeReportId) return;
+    if (!activeBatchChannelName.trim()) return;
+    void fetchLiveChannel(activeBatchChannelName);
+  }, [activeBatchChannelName, fetchLiveChannel]);
+
+  useEffect(() => {
+    if (!activeBatchChannelName.trim()) return;
     requestAnimationFrame(() => {
-      reportSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      liveReportSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-  }, [activeReportId]);
+  }, [liveReportNonce, activeBatchChannelName]);
 
   useEffect(() => {
     if (uploadMode === "file") setYoutubeFieldError("");
@@ -162,9 +179,10 @@ export default function ProcessPage() {
     setStage("");
     setProgress(0);
     setJobError("");
-    setActiveReportId(null);
-    hasAutoOpenedReportRef.current = false;
     confidenceFetchedRef.current.clear();
+    lastStatusesRef.current = new Map();
+    setActiveBatchChannelName("");
+    setLiveChannelData(null);
   }, []);
 
   useEffect(() => {
@@ -208,6 +226,20 @@ export default function ProcessPage() {
             };
           })
         );
+        // Detect transitions to completed to refresh channel report.
+        let anyJustCompleted = false;
+        const nextStatusMap = new Map(lastStatusesRef.current);
+        for (const u of updates) {
+          const prev = nextStatusMap.get(u.id) || "";
+          if (u.status === "completed" && prev !== "completed") anyJustCompleted = true;
+          nextStatusMap.set(u.id, u.status);
+        }
+        lastStatusesRef.current = nextStatusMap;
+        if (anyJustCompleted && activeBatchChannelName.trim()) {
+          void fetchLiveChannel(activeBatchChannelName);
+          liveReportNonceRef.current += 1;
+          setLiveReportNonce(liveReportNonceRef.current);
+        }
         setUploadedJobs((prev) =>
           prev.map((row) => {
             const u = updates.find((x) => x.id === row.id);
@@ -288,9 +320,13 @@ export default function ProcessPage() {
     try {
       const newRows: UploadJobRow[] = [];
       if (uploadMode === "youtube") {
+        const resolvedName =
+          (channelList.find((c) => c.id === channelId)?.name || "").trim() || channelName.trim() || "Channel";
+        setActiveBatchChannelName(resolvedName);
         const u = await createYouTubeJobWithChannel(yt, channelId);
         newRows.push({ id: u.job_id, name: "YouTube video", status: u.status, stage: "queued", progress: 0 });
       } else {
+        setActiveBatchChannelName(channelName.trim() || "Channel");
         const results = await Promise.all(
           batch.map(async (f) => {
             const tempId = `uploading-${crypto.randomUUID()}`;
@@ -319,6 +355,12 @@ export default function ProcessPage() {
         newRows.push(...results);
       }
       setUploadedJobs((prev) => dedupeJobs([...newRows, ...prev.filter((x) => !String(x.id).startsWith("uploading-"))]));
+      // Reset transition tracking for new batch rows.
+      lastStatusesRef.current = new Map(
+        newRows.filter((r) => r?.id).map((r) => [r.id, r.status])
+      );
+      liveReportNonceRef.current += 1;
+      setLiveReportNonce(liveReportNonceRef.current);
       if (newRows[0]) {
         setJobId(newRows[0].id);
         setStatus(newRows[0].status);
@@ -424,92 +466,130 @@ export default function ProcessPage() {
         </div>
 
         {uploadedJobs.length > 0 ? (
-          <div className="mt-8">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Results</div>
+          <div className="mt-8 space-y-6">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">Analysis Queue</div>
               <Button variant="premium-ghost" onClick={clearHistory}>
                 Clear history
               </Button>
             </div>
-            <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-thin">
-              {uploadedJobs.map((j) => {
-                const isTemp = String(j.id).startsWith("uploading-");
-                const isActiveReport = activeReportId === j.id;
-                const done = j.status === "completed";
-                const canOpenReport = done && !isTemp;
-                return (
-                  <button
-                    key={j.id}
-                    type="button"
-                    disabled={!canOpenReport}
-                    onClick={() => {
-                      if (!canOpenReport) return;
-                      setActiveReportId(j.id);
-                      setJobId(j.id);
-                    }}
-                    className={`flex-shrink-0 w-[180px] h-[90px] rounded-xl border px-3 py-2 text-left transition-colors ${
-                      isActiveReport
-                        ? "border-cyan-400/80 bg-cyan-500/10 ring-1 ring-cyan-400/30"
-                        : "border-white/10 bg-white/5 hover:bg-white/10"
-                    } ${canOpenReport ? "cursor-pointer" : "cursor-default opacity-90"}`}
-                  >
-                    <div className="text-xs font-medium text-white truncate" title={j.name}>
-                      {truncateFilename(j.name)}
-                    </div>
-                    <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-300">
-                      <span>{j.status}</span>
-                      {done ? <span className="text-emerald-400">✓</span> : null}
-                    </div>
-                    {done ? (
-                      <div className="mt-1 text-[11px] text-slate-400">
-                        Confidence:{" "}
-                        {j.confidence != null ? (
-                          <span className="text-slate-200">{j.confidence}</span>
-                        ) : (
-                          <span className="text-slate-500">…</span>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-[11px] text-slate-500">
-                        {Math.round((j.progress || 0) * 100)}% · {j.stage || "—"}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
 
-        {activeReportId ? (
-          <div ref={reportSectionRef} className="mt-10 max-w-7xl mx-auto scroll-mt-6">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-1">
-              <div className="text-sm font-medium text-white">
-                Report:{" "}
-                <span className="text-slate-200">
-                  {uploadedJobs.find((j) => j.id === activeReportId)?.name ?? activeReportId}
-                </span>
+            <Card className="p-4 bg-white/5 border border-white/10 backdrop-blur text-white rounded-2xl">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm text-slate-300">Processing: <span className="text-white font-semibold">{activeBatchChannelName || channelName || "Channel"}</span></div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {(() => {
+                      const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
+                      const total = rows.length;
+                      const completed = rows.filter((j) => j.status === "completed").length;
+                      const processing = rows.filter((j) => j.status === "processing").length;
+                      const queued = rows.filter((j) => j.status === "queued").length;
+                      const failed = rows.filter((j) => j.status === "failed").length;
+                      return `${completed} of ${total} completed · ${processing} processing · ${queued} queued${failed ? ` · ${failed} failed` : ""}`;
+                    })()}
+                  </div>
+                </div>
+                <div className="text-right">
+                  {(() => {
+                    const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
+                    const total = rows.length || 1;
+                    const prog = rows.reduce((s, j) => {
+                      if (j.status === "completed" || j.status === "failed") return s + 1;
+                      return s + Math.max(0, Math.min(1, Number(j.progress || 0)));
+                    }, 0);
+                    const pct = Math.round((prog / total) * 100);
+                    return <div className="text-xs text-slate-300 tabular-nums">{pct}%</div>;
+                  })()}
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <a
-                  href={`/video/${activeReportId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-cyan-300 hover:underline"
-                >
-                  Open full page ↗
-                </a>
-                <button
-                  type="button"
-                  aria-label="Close report"
-                  className="rounded-lg border border-white/15 px-2.5 py-1 text-sm text-slate-200 hover:bg-white/10"
-                  onClick={() => setActiveReportId(null)}
-                >
-                  ×
-                </button>
+
+              <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-cyan-400 rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.max(
+                      3,
+                      (() => {
+                        const rows = uploadedJobs.filter((j) => !String(j.id).startsWith("uploading-"));
+                        const total = rows.length || 1;
+                        const prog = rows.reduce((s, j) => {
+                          if (j.status === "completed" || j.status === "failed") return s + 1;
+                          return s + Math.max(0, Math.min(1, Number(j.progress || 0)));
+                        }, 0);
+                        return Math.round((prog / total) * 100);
+                      })()
+                    )}%`,
+                  }}
+                />
               </div>
+
+              <div className="mt-4">
+                <div className="text-xs text-slate-400 mb-2">Individual file status</div>
+                <div className="space-y-2">
+                  {uploadedJobs.map((j) => {
+                    const isTemp = String(j.id).startsWith("uploading-");
+                    const dot =
+                      j.status === "completed"
+                        ? "bg-emerald-400"
+                        : j.status === "failed"
+                          ? "bg-red-400"
+                          : j.status === "processing"
+                            ? "bg-cyan-400 animate-pulse"
+                            : "bg-amber-400";
+                    return (
+                      <div
+                        key={j.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className={`shrink-0 w-2 h-2 rounded-full ${dot}`} />
+                          <div className="min-w-0">
+                            <div className="text-xs text-white truncate" title={j.name}>
+                              {truncateFilename(j.name)}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              {j.stage || j.status}
+                              {j.status === "processing" || j.status === "queued"
+                                ? ` · ${Math.round((j.progress || 0) * 100)}%`
+                                : ""}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          {j.status === "completed" && !isTemp ? (
+                            <div className="text-[11px] text-slate-300 tabular-nums">
+                              confidence:{" "}
+                              <span className="text-slate-100 font-medium">{j.confidence ?? "—"}</span>
+                            </div>
+                          ) : j.status === "failed" ? (
+                            <div className="text-[11px] text-red-300">failed</div>
+                          ) : (
+                            <div className="text-[11px] text-slate-500">—</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </Card>
+
+            <div ref={liveReportSectionRef} className="scroll-mt-6">
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-3">
+                Live Channel Report
+              </div>
+              {activeBatchChannelName.trim() ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5">
+                  <ChannelReportClient
+                    key={`${activeBatchChannelName.trim().toLowerCase()}-${liveReportNonce}`}
+                    encodedName={encodeURIComponent(activeBatchChannelName.trim())}
+                  />
+                </div>
+              ) : (
+                <div className="text-sm text-slate-400">Set a channel name to see the live report.</div>
+              )}
             </div>
-            <AnalysisReport key={activeReportId} analysisId={activeReportId} embedded />
           </div>
         ) : null}
       </div>

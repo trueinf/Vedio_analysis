@@ -260,6 +260,45 @@ export async function listAnalysesForChannel(
   return await res.json();
 }
 
+export type ChannelReport = {
+  channel_name: string;
+  total_videos: number;
+  completed_videos: number;
+  avg_confidence: number;
+  avg_energy: number;
+  avg_wpm: number;
+  avg_eye_contact: number;
+  confidence_trend: "improving" | "declining" | "stable" | null;
+  recent_avg_confidence: number | null;
+  previous_avg_confidence: number | null;
+  top_coach_patterns: { comment: string; count: number }[];
+  best_videos: { filename: string; confidence: number | null; analysis_id: string }[];
+  worst_videos: { filename: string; confidence: number | null; analysis_id: string }[];
+  confidence_over_time: { date: string; value: number | null }[];
+  individual_videos: {
+    analysis_id: string;
+    filename: string;
+    confidence_score: number | null;
+    energy_score: number | null;
+    eye_contact_ratio: number | null;
+    created_at: string;
+    metrics: {
+      speech_rate_wpm: number | null;
+      filler_rate: number | null;
+      gesture_rate: number | null;
+      tonal_variation: number | null;
+      expression_change: number | null;
+    };
+  }[];
+};
+
+export async function fetchChannelReport(channelName: string): Promise<ChannelReport> {
+  const enc = encodeURIComponent(channelName.trim());
+  const res = await fetch(`${API_BASE}/api/channels/${enc}/report`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Channel report failed (${res.status})`);
+  return await res.json();
+}
+
 export async function getAnalysisResult(analysisId: string): Promise<any> {
   const res = await fetch(`${API_BASE}/api/analyses/${analysisId}/result`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Analysis result fetch failed (${res.status})`);

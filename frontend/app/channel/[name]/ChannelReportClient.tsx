@@ -4,13 +4,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import { AnalysisGrid } from "@/components/AnalysisGrid";
-import type { AnalysisRow, ChannelSummary } from "@/lib/api";
+import type { ChannelReport, ChannelSummary } from "@/lib/api";
 import {
   clearChannelAISummaryCache,
   fetchChannelAISummary,
+  fetchChannelReport,
   fetchChannelsSummary,
-  listAnalysesForChannel,
   updateChannelName,
 } from "@/lib/api";
 
@@ -54,86 +53,10 @@ function titleCase(s: string): string {
     .trim();
 }
 
-function roundAvg(arr: (number | null | undefined)[]): number {
-  const nums = arr.map((v) => Number(v)).filter((n) => Number.isFinite(n));
-  if (!nums.length) return 0;
-  return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
-}
-
-function eyeDisplayPct(raw: number | null | undefined): number | null {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n <= 1 ? Math.round(n * 100) : Math.round(n);
-}
-
-function collectCoachComments(rows: AnalysisRow[]): string[] {
-  const out: string[] = [];
-  for (const r of rows) {
-    if (r.status !== "completed") continue;
-    const rj = r.result_json as { coach_comments?: { comment?: string }[] } | null | undefined;
-    const cc = rj?.coach_comments;
-    if (!Array.isArray(cc)) continue;
-    for (const c of cc) {
-      const t = typeof c?.comment === "string" ? c.comment.trim() : "";
-      if (t) out.push(t);
-    }
-  }
-  return out;
-}
-
-function topPatterns(comments: string[], top = 5): { text: string; count: number }[] {
-  const counts = new Map<string, number>();
-  for (const c of comments) {
-    counts.set(c, (counts.get(c) || 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([text, count]) => ({ text, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, top);
-}
-
-type TrendPoint = { x: string; t: number; confidence: number | null; energy: number | null; wpm: number | null };
-
-function buildTrendPoints(rows: AnalysisRow[]): TrendPoint[] {
-  const completed = rows.filter((r) => r.status === "completed");
-  return completed.map((r) => {
-    const t = new Date(r.created_at).getTime();
-    return {
-      x: new Date(r.created_at).toLocaleDateString(),
-      t,
-      confidence: r.confidence_score != null ? Number(r.confidence_score) : null,
-      energy: r.energy_score != null ? Number(r.energy_score) : null,
-      wpm: r.wpm != null ? Number(r.wpm) : null,
-    };
-  });
-}
-
 const chartTooltip = {
   contentStyle: { background: "rgba(2,6,23,0.92)", border: "1px solid rgba(255,255,255,0.1)" },
   labelStyle: { color: "#94a3b8" },
 };
-
-function twoBucketDelta(
-  rows: AnalysisRow[],
-  pick: (a: AnalysisRow) => number | null
-): number | null {
-  const sorted = rows
-    .filter((r) => r.status === "completed")
-    .slice()
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  const withScores = sorted
-    .map((r) => {
-      const v = pick(r);
-      return v != null && Number.isFinite(v) ? { v: Number(v) } : null;
-    })
-    .filter((x): x is { v: number } => x != null);
-  if (withScores.length < 10) return null;
-  const latest = withScores.slice(0, 5);
-  const prev = withScores.slice(5, 10);
-  const recent = latest.reduce((s, x) => s + x.v, 0) / 5;
-  const previous = prev.reduce((s, x) => s + x.v, 0) / 5;
-  return recent - previous;
-}
 
 function TrendMetricLine(props: {
   label: string;
@@ -209,7 +132,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [analyses, setAnalyses] = useState<AnalysisRow[]>([]);
+  const [report, setReport] = useState<ChannelReport | null>(null);
   const [summaryMatch, setSummaryMatch] = useState<ChannelSummary | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -279,7 +202,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       try {
         const settled = await Promise.allSettled([
           fetchChannelsSummary(),
-          listAnalysesForChannel(rawName.trim(), true),
+          fetchChannelReport(rawName.trim()),
           fetchChannelAISummary(rawName.trim()),
         ]);
         if (!alive) return;
@@ -289,17 +212,12 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
         if (s0.status === "fulfilled" && s1.status === "fulfilled") {
           const sumJson = s0.value;
-          const chJson = s1.value;
+          const rep = s1.value;
           const key = rawName.trim().toLowerCase();
           const ch =
             (sumJson.channels || []).find((c) => c.name.trim().toLowerCase() === key) ?? null;
           setSummaryMatch(ch);
-          const rows = (chJson.analyses || []).slice().sort((a, b) => {
-            const ta = new Date(a.created_at).getTime();
-            const tb = new Date(b.created_at).getTime();
-            return ta - tb;
-          });
-          setAnalyses(rows);
+          setReport(rep);
           setErr("");
         } else {
           const msg =
@@ -309,7 +227,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
                 ? String(s1.reason instanceof Error ? s1.reason.message : s1.reason)
                 : "Failed to load channel";
           setErr(msg);
-          setAnalyses([]);
+          setReport(null);
           setSummaryMatch(null);
         }
 
@@ -325,7 +243,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       } catch (e: unknown) {
         if (!alive) return;
         setErr(e instanceof Error ? e.message : "Failed to load channel");
-        setAnalyses([]);
+        setReport(null);
         setSummaryMatch(null);
         setAiSummaryError("Could not generate summary");
       } finally {
@@ -346,97 +264,86 @@ export default function ChannelReportClient(props: { encodedName: string }) {
     };
   }, []);
 
-  const displayName = summaryMatch?.name?.trim() || rawName.trim() || "Channel";
+  const displayName = summaryMatch?.name?.trim() || report?.channel_name?.trim() || rawName.trim() || "Channel";
   const hue = hashHue(displayName);
 
-  const completedForStats = useMemo(
-    () => analyses.filter((a) => a.status === "completed"),
-    [analyses]
-  );
-
-  const avgConf = roundAvg(completedForStats.map((a) => a.confidence_score));
-  const avgEnergy = roundAvg(completedForStats.map((a) => a.energy_score));
-  const avgWpm = roundAvg(completedForStats.map((a) => a.wpm));
-  const eyeVals = completedForStats.map((a) => eyeDisplayPct(a.eye_contact_ratio)).filter((n): n is number => n != null);
-  const avgEye = eyeVals.length ? Math.round(eyeVals.reduce((a, b) => a + b, 0) / eyeVals.length) : 0;
+  const totals = useMemo(() => {
+    const r = report;
+    return {
+      totalVideos: Math.round(Number(r?.total_videos ?? 0) || 0),
+      completedVideos: Math.round(Number(r?.completed_videos ?? 0) || 0),
+      avgConf: Math.round(Number(r?.avg_confidence ?? 0) || 0),
+      avgEnergy: Math.round(Number(r?.avg_energy ?? 0) || 0),
+      avgWpm: Math.round(Number(r?.avg_wpm ?? 0) || 0),
+      avgEye: Math.round(Number(r?.avg_eye_contact ?? 0) || 0),
+    };
+  }, [report]);
 
   const earliest = useMemo(() => {
-    if (!analyses.length) return null;
+    const vids = report?.individual_videos || [];
+    if (!vids.length) return null;
     let min = Infinity;
-    for (const a of analyses) {
-      const t = new Date(a.created_at).getTime();
+    for (const a of vids) {
+      const t = new Date(a.created_at || "").getTime();
       if (Number.isFinite(t) && t < min) min = t;
     }
     return Number.isFinite(min) ? new Date(min) : null;
-  }, [analyses]);
+  }, [report]);
 
   const activeSince =
     earliest != null
       ? earliest.toLocaleDateString("en-US", { month: "long", year: "numeric" })
       : "—";
 
-  const trendPoints = useMemo(() => buildTrendPoints(analyses), [analyses]);
-  const avgConfLine = trendPoints.filter((p) => p.confidence != null).length
-    ? Math.round(
-        trendPoints.reduce((s, p) => s + (p.confidence ?? 0), 0) /
-          trendPoints.filter((p) => p.confidence != null).length
-      )
-    : avgConf;
-  const avgEnergyLine = trendPoints.filter((p) => p.energy != null).length
-    ? Math.round(
-        trendPoints.reduce((s, p) => s + (p.energy ?? 0), 0) /
-          trendPoints.filter((p) => p.energy != null).length
-      )
-    : avgEnergy;
-  const avgWpmLine = trendPoints.filter((p) => p.wpm != null).length
-    ? Math.round(
-        trendPoints.reduce((s, p) => s + (p.wpm ?? 0), 0) / trendPoints.filter((p) => p.wpm != null).length
-      )
-    : avgWpm;
+  const confTrend = useMemo(() => {
+    return (report?.confidence_over_time || [])
+      .map((p) => {
+        const t = new Date(p.date).getTime();
+        return { x: p.date, t, v: p.value == null ? null : Number(p.value) };
+      })
+      .filter((p) => Number.isFinite(p.t));
+  }, [report]);
 
-  const ranked = useMemo(() => {
-    const withScore = completedForStats
-      .map((a) => ({
-        a,
-        s: a.confidence_score != null ? Number(a.confidence_score) : null,
-      }))
-      .filter((x) => x.s != null && Number.isFinite(x.s)) as { a: AnalysisRow; s: number }[];
-    const top = withScore.slice().sort((x, y) => y.s - x.s).slice(0, 3);
-    const bottom = withScore.slice().sort((x, y) => x.s - y.s).slice(0, 3);
-    return { top, bottom };
-  }, [completedForStats]);
+  const seriesByDay = useMemo(() => {
+    const vids = report?.individual_videos || [];
+    const byDay: Record<string, { conf: number[]; energy: number[]; wpm: number[] }> = {};
+    for (const v of vids) {
+      const day = String(v.created_at || "").slice(0, 10);
+      if (!day) continue;
+      if (!byDay[day]) byDay[day] = { conf: [], energy: [], wpm: [] };
+      if (v.confidence_score != null) byDay[day].conf.push(Number(v.confidence_score));
+      if (v.energy_score != null) byDay[day].energy.push(Number(v.energy_score));
+      const w = v.metrics?.speech_rate_wpm;
+      if (w != null) byDay[day].wpm.push(Number(w));
+    }
+    const days = Object.keys(byDay).sort();
+    const mean = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+    return days.map((d) => ({
+      x: d,
+      confidence: mean(byDay[d].conf),
+      energy: mean(byDay[d].energy),
+      wpm: mean(byDay[d].wpm),
+    }));
+  }, [report]);
 
-  const coachPatterns = useMemo(() => {
-    const comments = collectCoachComments(analyses);
-    return topPatterns(comments, 5);
-  }, [analyses]);
+  const trendPoints = seriesByDay;
 
+  const avgConfLine = totals.avgConf;
+  const avgEnergyLine = totals.avgEnergy;
+  const avgWpmLine = totals.avgWpm;
+
+  const best = report?.best_videos || [];
+  const worst = report?.worst_videos || [];
+  const coachPatterns = report?.top_coach_patterns || [];
   const maxPatternCount = coachPatterns.length ? Math.max(...coachPatterns.map((p) => p.count)) : 1;
 
   const thumbUrl = summaryMatch?.thumbnailUrl?.trim() || null;
 
-  const completedCount = useMemo(() => analyses.filter((a) => a.status === "completed").length, [analyses]);
-
-  const confDelta = useMemo(
-    () =>
-      twoBucketDelta(analyses, (a) =>
-        a.confidence_score != null && Number.isFinite(Number(a.confidence_score))
-          ? Number(a.confidence_score)
-          : null
-      ),
-    [analyses]
-  );
-  const energyDelta = useMemo(
-    () =>
-      twoBucketDelta(analyses, (a) =>
-        a.energy_score != null && Number.isFinite(Number(a.energy_score)) ? Number(a.energy_score) : null
-      ),
-    [analyses]
-  );
-  const wpmDelta = useMemo(
-    () => twoBucketDelta(analyses, (a) => (a.wpm != null && Number.isFinite(Number(a.wpm)) ? Number(a.wpm) : null)),
-    [analyses]
-  );
+  const confDelta = useMemo(() => {
+    const r = report;
+    if (r?.recent_avg_confidence == null || r?.previous_avg_confidence == null) return null;
+    return Number(r.recent_avg_confidence) - Number(r.previous_avg_confidence);
+  }, [report]);
 
   async function regenerateAiSummary() {
     clearChannelAISummaryCache(rawName.trim());
@@ -536,14 +443,14 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             </div>
           )}
           <p className="text-slate-400 text-sm mt-1">
-            {analyses.length} video{analyses.length === 1 ? "" : "s"} · Active since {activeSince}
+            {totals.totalVideos} video{totals.totalVideos === 1 ? "" : "s"} · Active since {activeSince}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
-              { label: "Avg Confidence", value: loading ? "—" : String(avgConf) },
-              { label: "Avg Energy", value: loading ? "—" : String(avgEnergy) },
-              { label: "Avg WPM", value: loading ? "—" : String(avgWpm) },
-              { label: "Avg Eye Contact", value: loading ? "—" : `${avgEye}%` },
+              { label: "Avg Confidence", value: loading ? "—" : String(totals.avgConf) },
+              { label: "Avg Energy", value: loading ? "—" : String(totals.avgEnergy) },
+              { label: "Avg WPM", value: loading ? "—" : String(totals.avgWpm) },
+              { label: "Eye Contact", value: loading ? "—" : `${totals.avgEye}%` },
             ].map((p) => (
               <div
                 key={p.label}
@@ -555,14 +462,12 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             ))}
           </div>
 
-          {completedCount < 6 ? (
+          {report?.recent_avg_confidence == null || report?.previous_avg_confidence == null ? (
             <p className="mt-4 text-sm text-slate-500">Need 6+ videos for trend data.</p>
           ) : (
             <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 space-y-2">
               <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Trend</div>
               <TrendMetricLine label="Confidence" delta={confDelta} unit="pts" />
-              <TrendMetricLine label="Energy" delta={energyDelta} unit="pts" />
-              <TrendMetricLine label="WPM" delta={wpmDelta} unit="wpm" />
             </div>
           )}
 
@@ -676,26 +581,20 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         <div>
           <div className="text-sm font-semibold text-emerald-300/90">Top 3 videos</div>
           <div className="mt-3 space-y-2">
-            {ranked.top.length === 0 ? (
+            {best.length === 0 ? (
               <div className="text-sm text-slate-500">No scored videos yet.</div>
             ) : (
-              ranked.top.map(({ a, s }) => (
+              best.map((v) => (
                 <div
-                  key={String(a.job_id || a.id)}
+                  key={v.analysis_id}
                   className="flex items-center gap-3 bg-white/5 border border-emerald-500/20 rounded-xl p-2"
                 >
-                  <div className="w-14 h-10 rounded-lg bg-white/10 overflow-hidden shrink-0 border border-white/10">
-                    {a.thumbnail_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={a.thumbnail_url} alt="" className="w-full h-full object-cover" />
-                    ) : null}
-                  </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm truncate">{a.original_filename || a.title || a.job_id}</div>
-                    <div className="text-xs text-emerald-200/90">{Math.round(s)}</div>
+                    <div className="text-sm truncate">{v.filename}</div>
+                    <div className="text-xs text-emerald-200/90">{v.confidence != null ? Math.round(v.confidence) : "—"}</div>
                   </div>
                   <Link
-                    href={`/video/${encodeURIComponent(String(a.job_id || a.id))}`}
+                    href={`/video/${encodeURIComponent(String(v.analysis_id))}`}
                     className="text-xs text-cyan-300 shrink-0"
                   >
                     Open →
@@ -708,26 +607,20 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         <div>
           <div className="text-sm font-semibold text-amber-300/90">Needs work</div>
           <div className="mt-3 space-y-2">
-            {ranked.bottom.length === 0 ? (
+            {worst.length === 0 ? (
               <div className="text-sm text-slate-500">No scored videos yet.</div>
             ) : (
-              ranked.bottom.map(({ a, s }) => (
+              worst.map((v) => (
                 <div
-                  key={String(a.job_id || a.id)}
+                  key={v.analysis_id}
                   className="flex items-center gap-3 bg-white/5 border border-amber-500/20 rounded-xl p-2"
                 >
-                  <div className="w-14 h-10 rounded-lg bg-white/10 overflow-hidden shrink-0 border border-white/10">
-                    {a.thumbnail_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={a.thumbnail_url} alt="" className="w-full h-full object-cover" />
-                    ) : null}
-                  </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm truncate">{a.original_filename || a.title || a.job_id}</div>
-                    <div className="text-xs text-amber-200/90">{Math.round(s)}</div>
+                    <div className="text-sm truncate">{v.filename}</div>
+                    <div className="text-xs text-amber-200/90">{v.confidence != null ? Math.round(v.confidence) : "—"}</div>
                   </div>
                   <Link
-                    href={`/video/${encodeURIComponent(String(a.job_id || a.id))}`}
+                    href={`/video/${encodeURIComponent(String(v.analysis_id))}`}
                     className="text-xs text-cyan-300 shrink-0"
                   >
                     Open →
@@ -744,10 +637,10 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           <h2 className="text-lg font-semibold">Common coaching notes</h2>
           <div className="mt-4 space-y-3">
             {coachPatterns.map((p) => (
-              <div key={p.text} className="text-sm">
+              <div key={p.comment} className="text-sm">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-slate-400 tabular-nums">[{p.count}]</span>
-                  <span className="text-slate-100 flex-1 min-w-0">&quot;{p.text}&quot;</span>
+                  <span className="text-slate-100 flex-1 min-w-0">&quot;{p.comment}&quot;</span>
                 </div>
                 <div className="mt-1 h-2 rounded-full bg-white/10 overflow-hidden">
                   <div
@@ -762,15 +655,48 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       ) : null}
 
       <div className="mt-10">
-        <h2 className="text-lg font-semibold mb-2">All videos ({analyses.length})</h2>
-        <AnalysisGrid
-          analyses={analyses}
-          loading={loading}
-          error={err}
-          defaultChannel={rawName.trim()}
-          hideChannelFilter
-          hideStatsBar
-        />
+        <h2 className="text-lg font-semibold mb-2">All videos ({totals.totalVideos})</h2>
+        <div className="overflow-x-auto rounded-2xl border border-white/10 bg-white/5">
+          <table className="w-full text-sm min-w-[760px]">
+            <thead className="text-left text-slate-400 border-b border-white/10">
+              <tr>
+                <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3">Filename</th>
+                <th className="px-4 py-3">Confidence</th>
+                <th className="px-4 py-3">Energy</th>
+                <th className="px-4 py-3">WPM</th>
+                <th className="px-4 py-3">Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(report?.individual_videos || []).map((v) => (
+                <tr key={v.analysis_id} className="border-b border-white/5">
+                  <td className="px-4 py-3 text-slate-400">
+                    {v.created_at ? new Date(v.created_at).toLocaleDateString() : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-slate-200 truncate max-w-[420px]" title={v.filename}>
+                    {v.filename}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">{v.confidence_score ?? "—"}</td>
+                  <td className="px-4 py-3 tabular-nums">{v.energy_score ?? "—"}</td>
+                  <td className="px-4 py-3 tabular-nums">{v.metrics?.speech_rate_wpm ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <Link href={`/video/${encodeURIComponent(v.analysis_id)}`} className="text-cyan-300 text-xs">
+                      Open →
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+              {!loading && (!report || (report.individual_videos || []).length === 0) ? (
+                <tr>
+                  <td className="px-4 py-6 text-slate-400" colSpan={6}>
+                    No completed videos yet.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
