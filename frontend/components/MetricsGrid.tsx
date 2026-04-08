@@ -48,7 +48,7 @@ function StatCard(props: {
   const { main, suffix } = splitMetricValueDisplay(props.value);
   return (
     <Card
-      className={`p-4 h-full transition-all ${props.onClick ? "cursor-pointer hover:shadow-md" : ""} ${
+      className={`min-w-0 p-4 h-full transition-all ${props.onClick ? "cursor-pointer hover:shadow-md" : ""} ${
         props.active ? "ring-2 ring-cyan-400/40 shadow-md" : ""
       } bg-white/5 border border-white/10 backdrop-blur text-white hover:scale-[1.01]`}
       onClick={props.onClick}
@@ -125,7 +125,7 @@ export function MetricsGrid(props: {
     <>
       <div
         id="demo-metrics"
-        className={`w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 auto-rows-fr ${props.show ? "" : "hidden"}`}
+        className={`w-full min-w-0 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 ${props.show ? "" : "hidden"}`}
       >
         <StatCard
           title="Speech Rate"
