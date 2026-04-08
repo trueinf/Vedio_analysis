@@ -377,7 +377,7 @@ export default function ProcessPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white">
-      <div className="w-full max-w-[100rem] mx-auto px-4 sm:px-6 lg:px-10 py-6">
+      <div className="w-full max-w-[100rem] mx-auto px-6 py-6">
         <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 backdrop-blur px-4 py-3">
           <div>
             <div className="font-semibold tracking-tight text-3xl">Process</div>
@@ -562,11 +562,11 @@ export default function ProcessPage() {
             </div>
 
             {/* Full-width live report: no max-width on this shell; undo ChannelReportClient root max-w-7xl */}
-            <div ref={liveReportSectionRef} className="w-full max-w-none min-w-0 scroll-mt-6 p-0">
+            <div ref={liveReportSectionRef} className="w-full max-w-none min-w-0 mx-0 scroll-mt-6 p-0">
               <div className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-3">Live Channel Report</div>
               {activeBatchChannelName.trim() ? (
-                <div className="w-full max-w-none rounded-2xl border border-white/10 bg-white/5 overflow-x-auto">
-                  <div className="w-full max-w-none p-0 [&>div]:!max-w-none [&>div]:!mx-0 [&>div]:px-4 [&>div]:py-6 sm:[&>div]:px-6">
+                <div className="w-full max-w-none mx-0 rounded-2xl border border-white/10 bg-white/5 overflow-x-auto">
+                  <div className="w-full max-w-none mx-0 p-0 [&>div]:!max-w-none [&>div]:!mx-0 [&>div]:px-4 [&>div]:py-6 sm:[&>div]:px-6">
                     <ChannelReportClient
                       key={`${activeBatchChannelName.trim().toLowerCase()}-${liveReportNonce}`}
                       encodedName={encodeURIComponent(activeBatchChannelName.trim())}

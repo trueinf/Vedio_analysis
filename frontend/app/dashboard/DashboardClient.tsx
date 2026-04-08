@@ -273,7 +273,6 @@ export default function DashboardClient() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {visibleChannels.map((ch) => {
               const hue = hashHue(ch.name);
-              const processing = ch.processingCount > 0;
               const last = ch.lastAnalyzedAt || "";
               const thumb = ch.thumbnailUrl?.trim() || null;
               const cardErr = cardErrors[ch.id];
@@ -353,7 +352,7 @@ export default function DashboardClient() {
                   </div>
 
                   <div className="p-4">
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2">
                       <div className="min-w-0 flex-1">
                         {editingId === ch.id ? (
                           <div
@@ -442,15 +441,6 @@ export default function DashboardClient() {
                           return null;
                         })()}
                       </div>
-                      <span
-                        className={`shrink-0 text-[11px] px-2 py-1 rounded-lg border ${
-                          processing
-                            ? "text-amber-200 bg-amber-400/15 border-amber-400/30"
-                            : "text-emerald-200 bg-emerald-400/10 border-emerald-400/25"
-                        }`}
-                      >
-                        {processing ? `${ch.processingCount} processing` : "Active"}
-                      </span>
                     </div>
 
                     <div className="mt-3 grid grid-cols-3 gap-2 text-center">
