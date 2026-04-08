@@ -322,7 +322,7 @@ function CompareChannelPane() {
                   <th className="pb-2 pr-3">Metric</th>
                   <th className="pb-2 pr-3">{nameA}</th>
                   <th className="pb-2 pr-3">{nameB}</th>
-                  <th className="pb-2">Winner</th>
+                  <th className="pb-2">Win</th>
                 </tr>
               </thead>
               <tbody>
@@ -1524,7 +1524,7 @@ function CompareChannelVsVideoPane() {
                     Channel avg <span className="text-slate-500">({channelStats.completedCount} videos)</span>
                   </th>
                   <th className="pb-2 pr-3">Difference</th>
-                  <th className="pb-2">Winner</th>
+                  <th className="pb-2">Win</th>
                 </tr>
               </thead>
               <tbody>
