@@ -480,123 +480,125 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       ) : null}
 
       {loading ? (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_minmax(18rem,26rem)] gap-6`}>
-          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
-          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
+        <div className="mt-8 grid w-full grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
+          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse min-w-0" />
+          <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse w-full shrink-0 lg:w-[380px]" />
         </div>
       ) : err ? (
         <div className="mt-8 text-red-300 text-sm">{err}</div>
       ) : (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_minmax(18rem,26rem)] gap-6`}>
-          <div className="space-y-6 min-w-0">
-            <div ref={playerSectionRef} className="scroll-mt-6">
-            <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="text-sm font-semibold">Player</div>
-                <div className="text-xs text-slate-400">Seek by clicking insights or timeline</div>
-              </div>
-              <div className="relative z-10 isolate rounded-xl overflow-hidden border border-white/10 bg-black">
-                {videoSrc ? (
-                  <video
-                    ref={videoRef}
-                    src={videoSrc}
-                    controls
-                    playsInline
-                    preload="metadata"
-                    className="block w-full max-h-[min(72vh,900px)] min-h-[200px] bg-black object-contain [transform:translateZ(0)]"
-                    onTimeUpdate={(e) => setCurrentTime(Number((e.currentTarget as HTMLVideoElement).currentTime || 0))}
-                    onLoadedMetadata={() => {
-                      setVideoReady(true);
-                      try {
-                        const v = videoRef.current;
-                        const pending = pendingSeekRef.current;
-                        if (v && pending != null) {
-                          v.currentTime = Math.max(0, pending);
-                          pendingSeekRef.current = null;
-                          setCurrentTime(v.currentTime || pending);
-                        } else if (v) {
-                          setCurrentTime(v.currentTime || 0);
+        <div className="mt-8 w-full min-w-0 space-y-6">
+          <div className="grid w-full min-w-0 grid-cols-1 lg:grid-cols-[1fr_380px] gap-6">
+            <div ref={playerSectionRef} className="scroll-mt-6 min-w-0">
+              <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="text-sm font-semibold">Player</div>
+                  <div className="text-xs text-slate-400">Seek by clicking insights or timeline</div>
+                </div>
+                <div className="relative z-10 isolate rounded-xl overflow-hidden border border-white/10 bg-black w-full">
+                  {videoSrc ? (
+                    <video
+                      ref={videoRef}
+                      src={videoSrc}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="block w-full max-h-[min(72vh,900px)] min-h-[200px] bg-black object-contain [transform:translateZ(0)]"
+                      onTimeUpdate={(e) => setCurrentTime(Number((e.currentTarget as HTMLVideoElement).currentTime || 0))}
+                      onLoadedMetadata={() => {
+                        setVideoReady(true);
+                        try {
+                          const v = videoRef.current;
+                          const pending = pendingSeekRef.current;
+                          if (v && pending != null) {
+                            v.currentTime = Math.max(0, pending);
+                            pendingSeekRef.current = null;
+                            setCurrentTime(v.currentTime || pending);
+                          } else if (v) {
+                            setCurrentTime(v.currentTime || 0);
+                          }
+                        } catch {
+                          // ignore
                         }
-                      } catch {
-                        // ignore
-                      }
-                    }}
-                    onCanPlay={() => {
-                      setVideoReady(true);
-                      try {
-                        const v = videoRef.current;
-                        const pending = pendingSeekRef.current;
-                        if (v && pending != null) {
-                          v.currentTime = Math.max(0, pending);
-                          pendingSeekRef.current = null;
-                          setCurrentTime(v.currentTime || pending);
+                      }}
+                      onCanPlay={() => {
+                        setVideoReady(true);
+                        try {
+                          const v = videoRef.current;
+                          const pending = pendingSeekRef.current;
+                          if (v && pending != null) {
+                            v.currentTime = Math.max(0, pending);
+                            pendingSeekRef.current = null;
+                            setCurrentTime(v.currentTime || pending);
+                          }
+                        } catch {
+                          // ignore
                         }
-                      } catch {
-                        // ignore
-                      }
-                    }}
-                    onError={() => {
-                      const v = videoRef.current;
-                      const code = v?.error?.code;
-                      const map: Record<number, string> = {
-                        1: "Playback aborted",
-                        2: "Network error",
-                        3: "Decode failed (codec may be unsupported in this browser)",
-                        4: "Source not supported",
-                      };
-                      setDecodeErr(code != null ? map[code] ?? "Playback error" : "Playback error");
-                    }}
-                  />
-                ) : (
-                  <div className="h-[360px] flex items-center justify-center text-slate-300 text-sm">Video preview unavailable</div>
-                )}
-              </div>
-              {videoSrcErr ? <div className="mt-2 text-xs text-slate-300">{videoSrcErr}</div> : null}
-              {decodeErr ? <div className="mt-2 text-xs text-amber-200">{decodeErr}</div> : null}
-            </Card>
+                      }}
+                      onError={() => {
+                        const v = videoRef.current;
+                        const code = v?.error?.code;
+                        const map: Record<number, string> = {
+                          1: "Playback aborted",
+                          2: "Network error",
+                          3: "Decode failed (codec may be unsupported in this browser)",
+                          4: "Source not supported",
+                        };
+                        setDecodeErr(code != null ? map[code] ?? "Playback error" : "Playback error");
+                      }}
+                    />
+                  ) : (
+                    <div className="h-[360px] flex items-center justify-center text-slate-300 text-sm">Video preview unavailable</div>
+                  )}
+                </div>
+                {videoSrcErr ? <div className="mt-2 text-xs text-slate-300">{videoSrcErr}</div> : null}
+                {decodeErr ? <div className="mt-2 text-xs text-amber-200">{decodeErr}</div> : null}
+              </Card>
             </div>
 
-            <InsightsPanel
-              insights={keyInsights.insights}
-              engagementDrops={keyInsights.drops}
-              confidenceScore={Math.round(Number(detail?.analysis?.confidence_score ?? result?.confidence_score ?? 0) || 0)}
-              energyScore={Math.round(Number(detail?.analysis?.energy_score ?? result?.energy_score ?? 0) || 0)}
-              duration={durationSec}
-              onSeek={(t) => onSeek(t)}
+            <div className="w-full shrink-0 lg:w-[380px] min-w-0">
+              <Card className={`p-4 rounded-2xl h-full min-h-[200px] ${premiumSurfaceClass}`}>
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">AI Coach</div>
+                  <div className="text-xs text-slate-400">Actionable suggestions</div>
+                </div>
+                <div className="mt-3 min-h-0">
+                  <CoachPanel comments={coachComments.map((x) => ({ t0: x.t0, comment: x.comment }))} onClickComment={(t0) => seekTo(t0, { scrollIntoView: true })} />
+                </div>
+              </Card>
+            </div>
+          </div>
+
+          <InsightsPanel
+            insights={keyInsights.insights}
+            engagementDrops={keyInsights.drops}
+            confidenceScore={Math.round(Number(detail?.analysis?.confidence_score ?? result?.confidence_score ?? 0) || 0)}
+            energyScore={Math.round(Number(detail?.analysis?.energy_score ?? result?.energy_score ?? 0) || 0)}
+            duration={durationSec}
+            onSeek={(t) => onSeek(t)}
+          />
+
+          <div className="w-full min-w-0 bg-white/5 border border-white/10 rounded-2xl p-4 backdrop-blur">
+            <div className="text-sm font-semibold mb-3">Metrics</div>
+            <MetricsGrid
+              show
+              currentStepId="report"
+              demoMetricValue={Number(metrics.raw.wpm) || 0}
+              selectedMetric={selectedMetric}
+              onSelectMetric={(m) => setSelectedMetric(m)}
+              cards={metricCardsSnapshot}
+              events={timelineEvents}
+              durationSec={durationSec}
+              eyeNotMeasurable={eyeNotMeasurable}
+              metricDetailContext={null}
             />
+          </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 backdrop-blur">
-              <div className="text-sm font-semibold mb-3">Metrics</div>
-              <MetricsGrid
-                show
-                currentStepId="report"
-                demoMetricValue={Number(metrics.raw.wpm) || 0}
-                selectedMetric={selectedMetric}
-                onSelectMetric={(m) => setSelectedMetric(m)}
-                cards={metricCardsSnapshot}
-                events={timelineEvents}
-                durationSec={durationSec}
-                eyeNotMeasurable={eyeNotMeasurable}
-                metricDetailContext={null}
-              />
-            </div>
-
+          <div className="w-full min-w-0">
             <Timeline events={timelineEvents} durationSec={durationSec} currentTime={currentTime} onSeek={(t) => seekTo(t, { scrollIntoView: true })} />
-
-            <MomentsPanel worstMoments={worstMoments} bestMoments={bestMoments} onSeek={(t0, _t1) => seekTo(t0, { scrollIntoView: true })} />
           </div>
 
-          <div className="space-y-6">
-            <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-semibold">AI Coach</div>
-                <div className="text-xs text-slate-400">Actionable suggestions</div>
-              </div>
-              <div className="mt-3">
-                <CoachPanel comments={coachComments.map((x) => ({ t0: x.t0, comment: x.comment }))} onClickComment={(t0) => seekTo(t0, { scrollIntoView: true })} />
-              </div>
-            </Card>
-          </div>
+          <MomentsPanel worstMoments={worstMoments} bestMoments={bestMoments} onSeek={(t0, _t1) => seekTo(t0, { scrollIntoView: true })} />
         </div>
       )}
     </div>

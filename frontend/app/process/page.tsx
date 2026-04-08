@@ -393,11 +393,10 @@ export default function ProcessPage() {
           </div>
         </div>
 
-        {/* When results are showing, use full-width two columns:
-            Left = upload + queue, Right = live report */}
+        {/* Upload + queue stay readable width; live report is full width below (no 50/50 split). */}
         {uploadedJobs.length > 0 ? (
-          <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="space-y-6">
+          <div className="mt-6 flex flex-col gap-8">
+            <div className="w-full max-w-3xl space-y-6">
               <VideoUploadPanel
                 jobId={jobId}
                 localVideoUrl={localVideoUrl}
@@ -562,15 +561,17 @@ export default function ProcessPage() {
               </div>
             </div>
 
-            {/* Right column: Live report */}
-            <div ref={liveReportSectionRef} className="scroll-mt-6">
+            {/* Full-width live report: no max-width on this shell; undo ChannelReportClient root max-w-7xl */}
+            <div ref={liveReportSectionRef} className="w-full max-w-none min-w-0 scroll-mt-6 p-0">
               <div className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-3">Live Channel Report</div>
               {activeBatchChannelName.trim() ? (
-                <div className="rounded-2xl border border-white/10 bg-white/5">
-                  <ChannelReportClient
-                    key={`${activeBatchChannelName.trim().toLowerCase()}-${liveReportNonce}`}
-                    encodedName={encodeURIComponent(activeBatchChannelName.trim())}
-                  />
+                <div className="w-full max-w-none rounded-2xl border border-white/10 bg-white/5 overflow-x-auto">
+                  <div className="w-full max-w-none p-0 [&>div]:!max-w-none [&>div]:!mx-0 [&>div]:px-4 [&>div]:py-6 sm:[&>div]:px-6">
+                    <ChannelReportClient
+                      key={`${activeBatchChannelName.trim().toLowerCase()}-${liveReportNonce}`}
+                      encodedName={encodeURIComponent(activeBatchChannelName.trim())}
+                    />
+                  </div>
                 </div>
               ) : (
                 <div className="text-sm text-slate-400">Set a channel name to see the live report.</div>

@@ -104,7 +104,7 @@ export function Timeline(props: {
       </div>
 
       <div
-        className="relative rounded-xl bg-slate-100 border border-black/5 overflow-hidden cursor-pointer h-12"
+        className="relative w-full rounded-xl bg-slate-100 border border-black/5 overflow-hidden cursor-pointer h-12"
         onClick={(e) => {
           const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
           const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));

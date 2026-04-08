@@ -51,11 +51,11 @@ export function InsightsPanel(props: {
       initial={{ opacity: 0, y: 18 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: "easeOut" }}
-      className="col-span-12 mb-6"
+      className="w-full mb-6"
     >
       <Card className={`p-6 rounded-2xl shadow-lg ${premiumSurfaceClass}`}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2 rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="grid w-full grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 min-w-0">
+          <div className="min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
             <div className="text-lg font-semibold text-white">🔥 Key Insights</div>
             <ul className="mt-3 space-y-2">
               {insightRows.map((x, i) => {
@@ -76,14 +76,14 @@ export function InsightsPanel(props: {
               })}
             </ul>
           </div>
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 w-full lg:w-auto shrink-0 lg:min-w-[200px]">
             <ScoreCard title="Confidence Score" value={props.confidenceScore} />
             <ScoreCard title="Energy Score" value={props.energyScore} />
           </div>
         </div>
-        <div className="mt-5">
+        <div className="mt-5 w-full">
           <div className="text-xs text-slate-300 mb-2">Engagement Drops</div>
-          <div className="relative h-3 bg-white/10 rounded-full overflow-hidden">
+          <div className="relative w-full h-3 bg-white/10 rounded-full overflow-hidden">
             {props.engagementDrops.map((d, i) => {
               const t0 = Number(d.t0 || 0);
               const t1 = Number(d.t1 ?? d.t0 ?? 0);
