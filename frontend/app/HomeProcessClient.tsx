@@ -175,7 +175,7 @@ export default function HomeProcessClient() {
       ) : null}
 
       {activeReportId ? (
-        <div ref={reportSectionRef} className="mt-10 scroll-mt-6 max-w-7xl mx-auto">
+        <div ref={reportSectionRef} className="mt-10 scroll-mt-6 w-full max-w-[100rem] mx-auto px-4 sm:px-6 lg:px-10">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4 px-1">
             <div className="text-sm font-medium text-white">
               Report:{" "}

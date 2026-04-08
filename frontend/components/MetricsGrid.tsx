@@ -16,6 +16,17 @@ function metricIcon(metric: string): string {
   return "•";
 }
 
+/** Split "127 WPM" / "93%" so the number is large and the unit is smaller — avoids layout overlap. */
+function splitMetricValueDisplay(value: string): { main: string; suffix: string | null } {
+  const v = value.trim();
+  if (/^n\/a$/i.test(v) || v === "—" || v === "-") return { main: v, suffix: null };
+  const wpm = v.match(/^([\d.,]+)\s*WPM$/i);
+  if (wpm) return { main: wpm[1], suffix: "WPM" };
+  const pct = v.match(/^([\d.,]+)\s*%$/);
+  if (pct) return { main: pct[1], suffix: "%" };
+  return { main: v, suffix: null };
+}
+
 function StatCard(props: {
   title: string;
   subtitle: string;
@@ -34,6 +45,7 @@ function StatCard(props: {
         : props.badge.tone === "bad"
           ? "bg-red-400/10 border-red-400/25 text-red-200"
           : "bg-white/5 border-white/15 text-slate-200";
+  const { main, suffix } = splitMetricValueDisplay(props.value);
   return (
     <Card
       className={`p-4 h-full transition-all ${props.onClick ? "cursor-pointer hover:shadow-md" : ""} ${
@@ -43,10 +55,17 @@ function StatCard(props: {
     >
       <div className="text-base font-semibold">{props.title}</div>
       <div className="text-sm text-slate-300 mt-0.5">{props.subtitle}</div>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <div className="text-xl shrink-0">{props.icon ?? ""}</div>
-        <div className="text-4xl font-semibold leading-none text-right min-w-0 flex-1">{props.value}</div>
-        <div className={`text-xs px-2 py-1 rounded-md shrink-0 self-end border ${tone}`}>{props.badge.text}</div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <span className="text-2xl leading-none shrink-0" aria-hidden>
+          {props.icon ?? ""}
+        </span>
+        <span className={`text-xs font-medium px-2.5 py-1 rounded-md shrink-0 border ${tone}`}>{props.badge.text}</span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 min-h-[2.5rem]">
+        <span className="text-4xl font-semibold tabular-nums tracking-tight text-white leading-none">{main}</span>
+        {suffix ? (
+          <span className="text-sm font-medium text-slate-400 leading-none pb-0.5">{suffix}</span>
+        ) : null}
       </div>
       {props.hint ? (
         <p className="text-xs text-slate-400 mt-3 pt-3 border-t border-white/10 leading-relaxed">{props.hint}</p>

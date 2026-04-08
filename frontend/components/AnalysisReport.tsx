@@ -453,7 +453,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
     return out;
   }, [result]);
 
-  const outerClass = embedded ? "w-full" : "max-w-7xl mx-auto px-6 py-8";
+  const outerClass = embedded ? "w-full" : "w-full max-w-[100rem] mx-auto px-4 sm:px-6 lg:px-10 py-8";
 
   return (
     <div className={outerClass}>
@@ -480,14 +480,14 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
       ) : null}
 
       {loading ? (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6`}>
+        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_minmax(18rem,26rem)] gap-6`}>
           <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
           <div className="bg-white/5 border border-white/10 rounded-2xl h-96 animate-pulse" />
         </div>
       ) : err ? (
         <div className="mt-8 text-red-300 text-sm">{err}</div>
       ) : (
-        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6`}>
+        <div className={`mt-8 grid grid-cols-1 lg:grid-cols-[1fr_minmax(18rem,26rem)] gap-6`}>
           <div className="space-y-6 min-w-0">
             <div ref={playerSectionRef} className="scroll-mt-6">
             <Card className="p-4 rounded-2xl bg-white/5 border border-white/10 text-white">

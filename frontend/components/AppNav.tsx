@@ -19,7 +19,7 @@ export default function AppNav() {
   const pathname = usePathname() || "";
   return (
     <nav className="sticky top-0 z-50 border-b border-white/10 bg-slate-950/80 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div className="w-full max-w-[100rem] mx-auto px-4 sm:px-6 lg:px-10 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-cyan-400 rounded-lg flex items-center justify-center text-slate-950 font-bold text-sm">
             ▶
