@@ -106,7 +106,7 @@ export function MetricsGrid(props: {
     <>
       <div
         id="demo-metrics"
-        className={`col-span-12 grid grid-cols-1 md:grid-cols-3 gap-5 auto-rows-fr ${props.show ? "" : "hidden"}`}
+        className={`w-full grid grid-cols-1 md:grid-cols-3 gap-5 auto-rows-fr ${props.show ? "" : "hidden"}`}
       >
         <StatCard
           title="Speech Rate"
@@ -184,7 +184,7 @@ export function MetricsGrid(props: {
         />
       </div>
 
-      <div className={`col-span-12 grid grid-cols-1 md:grid-cols-2 gap-5 auto-rows-fr ${props.show ? "" : "hidden"}`}>
+      <div className={`w-full grid grid-cols-1 md:grid-cols-2 gap-5 auto-rows-fr ${props.show ? "" : "hidden"}`}>
         <StatCard
           title="Tonal Variation"
           subtitle="Pitch Variation (librosa)"

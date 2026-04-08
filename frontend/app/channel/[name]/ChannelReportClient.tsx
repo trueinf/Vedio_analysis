@@ -716,33 +716,31 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           Click any metric for the full breakdown (modal uses your most recent completed video).
         </p>
         <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="grid grid-cols-12 gap-0">
-            <MetricsGrid
-              show
-              currentStepId="channel"
-              demoMetricValue={Number(aggregatedMetricCards.wpm) || 0}
-              selectedMetric={selectedMetric}
-              onSelectMetric={(m) => setSelectedMetric(m)}
-              cards={aggregatedMetricCards}
-              events={latestEvents}
-              durationSec={latestDurationSec || 0}
-              eyeNotMeasurable={eyeNotMeasurable}
-              metricDetailContext={
-                latestResult
-                  ? {
-                      durationSec: latestDurationSec || 0,
-                      binSizeSec: 10,
-                      timelineBins: (latestResult?.timeline_bins ?? latestResult?.timelineBins ?? []) as any[],
-                      rawCards: (latestResult?.cards ?? null) as any,
-                      transcriptPreview: String(latestResult?.transcript_preview ?? latestResult?.transcriptPreview ?? "") || null,
-                      summary: (latestResult?.summary ?? null) as any,
-                      quality: (latestResult?.quality ?? null) as any,
-                      speakers: (latestResult?.speakers ?? null) as any,
-                    }
-                  : null
-              }
-            />
-          </div>
+          <MetricsGrid
+            show
+            currentStepId="channel"
+            demoMetricValue={Number(aggregatedMetricCards.wpm) || 0}
+            selectedMetric={selectedMetric}
+            onSelectMetric={(m) => setSelectedMetric(m)}
+            cards={aggregatedMetricCards}
+            events={latestEvents}
+            durationSec={latestDurationSec || 0}
+            eyeNotMeasurable={eyeNotMeasurable}
+            metricDetailContext={
+              latestResult
+                ? {
+                    durationSec: latestDurationSec || 0,
+                    binSizeSec: 10,
+                    timelineBins: (latestResult?.timeline_bins ?? latestResult?.timelineBins ?? []) as any[],
+                    rawCards: (latestResult?.cards ?? null) as any,
+                    transcriptPreview: String(latestResult?.transcript_preview ?? latestResult?.transcriptPreview ?? "") || null,
+                    summary: (latestResult?.summary ?? null) as any,
+                    quality: (latestResult?.quality ?? null) as any,
+                    speakers: (latestResult?.speakers ?? null) as any,
+                  }
+                : null
+            }
+          />
         </div>
       </div>
 

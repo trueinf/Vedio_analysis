@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { Button, Card, premiumSurfaceClass } from "@/components/ui";
 import DarkSelect from "@/components/DarkSelect";
@@ -502,9 +502,20 @@ type CvvMetric = {
   kind: "higher" | "lower" | "wpm_opt";
 };
 
-function computeWinner(metric: CvvMetric): "video" | "channel" | "tie" {
-  const v = metric.video;
-  const c = metric.channel;
+/** Channel-side aggregate used in Channel vs Video results (`channelStats` in the pane). */
+type CvvChannelData = {
+  name: string;
+  completedCount: number;
+  recentAvgConfidence: number | null;
+  previousAvgConfidence: number | null;
+  topCoach: { comment: string; count: number }[];
+};
+
+const CVV_WPM_TARGET = 130;
+
+function getWinner(metric: CvvMetric, videoVal: number | null, channelVal: number | null): "video" | "channel" | "tie" {
+  const v = videoVal;
+  const c = channelVal;
   if (v == null || c == null) return "tie";
   if (metric.kind === "lower") {
     if (v < c - 0.1) return "video";
@@ -512,10 +523,8 @@ function computeWinner(metric: CvvMetric): "video" | "channel" | "tie" {
     return "tie";
   }
   if (metric.kind === "wpm_opt") {
-    const opt = 130;
-    const dv = Math.abs(v - opt);
-    const dc = Math.abs(c - opt);
-    // Spec: no tie case — closer wins, otherwise channel.
+    const dv = Math.abs(v - CVV_WPM_TARGET);
+    const dc = Math.abs(c - CVV_WPM_TARGET);
     return dv < dc ? "video" : "channel";
   }
   if (v > c + 2) return "video";
@@ -523,11 +532,157 @@ function computeWinner(metric: CvvMetric): "video" | "channel" | "tie" {
   return "tie";
 }
 
+function getDelta(metric: CvvMetric, videoVal: number | null, channelVal: number | null): number | null {
+  if (videoVal == null || channelVal == null) return null;
+  if (metric.kind === "lower") return channelVal - videoVal;
+  if (metric.kind === "wpm_opt")
+    return Math.abs(channelVal - CVV_WPM_TARGET) - Math.abs(videoVal - CVV_WPM_TARGET);
+  return videoVal - channelVal;
+}
+
+function getPriority(metric: CvvMetric, delta: number | null): "high" | "medium" | "low" {
+  if (delta == null) return "low";
+  const a = Math.abs(delta);
+  if (metric.kind === "wpm_opt") {
+    if (a >= 20) return "high";
+    if (a >= 8) return "medium";
+    return "low";
+  }
+  if (metric.format === "pct0") {
+    if (a >= 8) return "high";
+    if (a >= 4) return "medium";
+    return "low";
+  }
+  if (metric.format === "float1") {
+    if (a >= 3) return "high";
+    if (a >= 1.5) return "medium";
+    return "low";
+  }
+  if (a >= 12) return "high";
+  if (a >= 5) return "medium";
+  return "low";
+}
+
+function computeRanking(
+  videoConfidence: number | null,
+  channelAnalyses: number[]
+): { rank: number; total: number; percentile: number } | null {
+  if (videoConfidence == null) return null;
+  const scores = channelAnalyses
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => b - a);
+  if (!scores.length) return null;
+  const v = Number(videoConfidence);
+  let rank = scores.length;
+  for (let i = 0; i < scores.length; i++) {
+    if (v >= scores[i]) {
+      rank = i + 1;
+      break;
+    }
+  }
+  const total = scores.length;
+  const percentile = Math.round((1 - (rank - 1) / total) * 100);
+  return { rank, total, percentile };
+}
+
+type CvvActionItem = {
+  metricKey: CvvMetricKey;
+  priority: "high" | "medium" | "low";
+  kind: "close_gap" | "keep_edge" | "steady";
+  message: string;
+};
+
+function generateActions(metrics: CvvMetric[], videoData: VideoResult, channelData: CvvChannelData): CvvActionItem[] {
+  const priRank = { high: 0, medium: 1, low: 2 } as const;
+  const out: CvvActionItem[] = [];
+
+  for (const m of metrics) {
+    const w = getWinner(m, m.video, m.channel);
+    const delta = getDelta(m, m.video, m.channel);
+    const pr = getPriority(m, delta);
+
+    if (w === "channel") {
+      const msg =
+        m.key === "fillers"
+          ? `Reduce filler words toward ${channelData.name}'s typical pace (channel avg with ${channelData.completedCount} videos).`
+          : m.key === "wpm"
+            ? `Adjust speech rate toward ~${CVV_WPM_TARGET} WPM; channel average is a useful reference.`
+            : `Improve ${m.name.toLowerCase()} to get closer to ${channelData.name}'s channel average.`;
+      out.push({ metricKey: m.key, priority: pr, kind: "close_gap", message: msg });
+    } else if (w === "video") {
+      out.push({
+        metricKey: m.key,
+        priority: pr,
+        kind: "keep_edge",
+        message: `You are ahead of ${channelData.name} on ${m.name.toLowerCase()} — keep that habit in the next recordings.`,
+      });
+    } else {
+      if (pr === "high") {
+        out.push({
+          metricKey: m.key,
+          priority: "low",
+          kind: "steady",
+          message: `${m.name} is effectively tied with ${channelData.name}'s average; small tweaks could tip it.`,
+        });
+      }
+    }
+  }
+
+  const topChannelPattern = channelData.topCoach[0];
+  if (topChannelPattern?.comment) {
+    const mention = videoData.coachComments.some((c) => c.toLowerCase() === String(topChannelPattern.comment).toLowerCase());
+    out.push({
+      metricKey: "confidence",
+      priority: mention ? "medium" : "high",
+      kind: mention ? "steady" : "close_gap",
+      message: mention
+        ? `Your coach notes align with the channel's top pattern (“${topChannelPattern.comment}”).`
+        : `Channel often gets “${topChannelPattern.comment}” — compare with this video's coach notes for ${videoData.filename}.`,
+    });
+  }
+
+  const ra = channelData.recentAvgConfidence;
+  const pa = channelData.previousAvgConfidence;
+  if (ra != null && pa != null) {
+    const d = Math.round(ra - pa);
+    if (d > 3) {
+      out.push({
+        metricKey: "confidence",
+        priority: "medium",
+        kind: "steady",
+        message: `${channelData.name}'s recent confidence is rising (+${d} vs prior batch); the bar is moving up.`,
+      });
+    } else if (d < -3) {
+      out.push({
+        metricKey: "confidence",
+        priority: "medium",
+        kind: "steady",
+        message: `${channelData.name}'s recent confidence dipped (${d} vs prior batch); averages may be easier to beat short term.`,
+      });
+    }
+  }
+
+  out.sort((a, b) => priRank[a.priority] - priRank[b.priority]);
+  return out;
+}
+
+function computeWinner(metric: CvvMetric): "video" | "channel" | "tie" {
+  return getWinner(metric, metric.video, metric.channel);
+}
+
 function fmtVal(v: number | null, f: CvvMetric["format"]): string {
   if (v == null) return "No data";
   if (f === "pct0") return `${Math.round(v)}%`;
   if (f === "float1") return v.toFixed(1);
   return String(Math.round(v));
+}
+
+function fmtDeltaCvv(m: CvvMetric, delta: number | null): string {
+  if (delta == null) return "—";
+  if (m.format === "pct0") return `${delta >= 0 ? "+" : ""}${Math.round(delta)}%`;
+  if (m.format === "float1") return `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`;
+  return `${delta >= 0 ? "+" : ""}${Math.round(delta)}`;
 }
 
 function CompareChannelVsVideoPane() {
@@ -766,28 +921,45 @@ function CompareChannelVsVideoPane() {
     return { name: top.metric.name, deltaText: d };
   }, [channelStats, videoData, metrics]);
 
-  const confidenceRank = useMemo(() => {
-    if (!channelStats || !videoData?.confidence) return null;
-    const scores = (channelStats.confidenceRankList || [])
-      .slice()
-      .filter((n: number) => Number.isFinite(n))
-      .sort((a: number, b: number) => b - a);
-    if (!scores.length) return null;
-    const v = Number(videoData.confidence);
-    let rank = scores.length;
-    for (let i = 0; i < scores.length; i++) {
-      if (v >= scores[i]) { rank = i + 1; break; }
-    }
-    const total = scores.length;
-    const percentile = Math.round((1 - (rank - 1) / total) * 100);
-    return { rank, total, percentile };
-  }, [channelStats, videoData?.confidence]);
+  const confidenceRank = useMemo(
+    () => computeRanking(videoData?.confidence ?? null, channelStats?.confidenceRankList ?? []),
+    [videoData?.confidence, channelStats?.confidenceRankList]
+  );
 
-  const visualMetrics = useMemo(() => {
-    // Spec: 6 metrics mini-bars grid (exclude confidence; it's already charted).
-    const byKey = new Map(metrics.map((m) => [m.key, m]));
-    const keys: CvvMetricKey[] = ["energy", "wpm", "eye", "fillers", "gestures", "tonal"];
-    return keys.map((k) => byKey.get(k)).filter(Boolean) as CvvMetric[];
+  const cvvMetricRows = useMemo(() => {
+    return metrics.map((m) => {
+      const w = getWinner(m, m.video, m.channel);
+      const delta = getDelta(m, m.video, m.channel);
+      const pr = getPriority(m, delta);
+      const deltaStr = fmtDeltaCvv(m, delta);
+      let justification = "";
+      if (m.video == null || m.channel == null) {
+        justification = "Missing video or channel benchmark data for this metric.";
+      } else if (w === "tie") {
+        justification =
+          m.kind === "wpm_opt"
+            ? `Both sides are similarly close to the ${CVV_WPM_TARGET} WPM target.`
+            : m.kind === "lower"
+              ? "Filler rates are within the tie band for this metric."
+              : "Values are within the tie band (±2) for this metric.";
+      } else if (m.kind === "wpm_opt") {
+        justification =
+          w === "video"
+            ? `This video is closer to the optimal ${CVV_WPM_TARGET} WPM than the channel average.`
+            : `The channel average is closer to ${CVV_WPM_TARGET} WPM than this video.`;
+      } else if (m.kind === "lower") {
+        justification =
+          w === "video"
+            ? `Fewer fillers per minute than the channel average (gap priority: ${pr}).`
+            : `More fillers per minute than the channel average (gap priority: ${pr}).`;
+      } else {
+        justification =
+          w === "video"
+            ? `Higher than the channel average (gap priority: ${pr}).`
+            : `Lower than the channel average (gap priority: ${pr}).`;
+      }
+      return { m, w, delta, deltaStr, pr, justification };
+    });
   }, [metrics]);
 
   const strengthsAndGaps = useMemo(() => {
@@ -796,7 +968,7 @@ function CompareChannelVsVideoPane() {
     const gaps: string[] = [];
     const ties: string[] = [];
     for (const m of metrics) {
-      const w = computeWinner(m);
+      const w = getWinner(m, m.video, m.channel);
       const v = m.video;
       const c = m.channel;
       if (v == null || c == null) continue;
@@ -841,6 +1013,34 @@ function CompareChannelVsVideoPane() {
         : "This video’s coach notes closely match the channel’s recurring patterns";
     return { videoTags, channelTags, insight };
   }, [channelStats, videoData]);
+
+  const coachOverlap = useMemo(() => {
+    if (!coachPanels) return null;
+    const vSet = new Set(coachPanels.videoTags.map(([t]) => t.toLowerCase()));
+    let overlap = 0;
+    for (const p of coachPanels.channelTags) {
+      if (vSet.has(String(p.comment || "").toLowerCase())) overlap += 1;
+    }
+    const denom = coachPanels.channelTags.length || 1;
+    const ratioPct = Math.round((overlap / denom) * 100);
+    const videoIssueCount = coachPanels.videoTags.reduce((a, [, n]) => a + n, 0);
+    const channelIssueCount = coachPanels.channelTags.reduce((a, p) => a + Number(p.count || 0), 0);
+    const issueRatio =
+      channelIssueCount > 0 ? (videoIssueCount / channelIssueCount).toFixed(2) : videoIssueCount > 0 ? "∞" : "—";
+    return { overlap, denom: coachPanels.channelTags.length, ratioPct, videoIssueCount, channelIssueCount, issueRatio };
+  }, [coachPanels]);
+
+  const cvvActions = useMemo(() => {
+    if (!channelStats || !videoData || !metrics.length) return [] as CvvActionItem[];
+    const channelData: CvvChannelData = {
+      name: channelStats.name,
+      completedCount: channelStats.completedCount,
+      recentAvgConfidence: channelStats.recentAvgConfidence,
+      previousAvgConfidence: channelStats.previousAvgConfidence,
+      topCoach: channelStats.topCoach,
+    };
+    return generateActions(metrics, videoData, channelData);
+  }, [channelStats, videoData, metrics]);
 
   const channelOptions = useMemo(
     () => channelList.filter((c) => (c.totalVideos || 0) > 0).map((c) => ({ value: c.id, label: `${c.name} (${c.totalVideos} videos)` })),
@@ -977,62 +1177,86 @@ function CompareChannelVsVideoPane() {
 
       {showResults && channelStats && videoData ? (
         <>
+          {/* 1. Verdict banner with score ring */}
           {verdict ? (
-            <div className={clsx("rounded-2xl border px-5 py-4", verdict.tone)}>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-sm font-semibold">{verdict.label}</div>
-                <div className="text-sm text-slate-200">
-                  This video outperforms {channelStats.name}&apos;s channel average in <span className="font-semibold">{wins}</span> of 7 metrics
+            <div className={clsx("rounded-2xl border px-5 py-5", verdict.tone)}>
+              <div className="flex flex-wrap items-center gap-6">
+                <div className="relative shrink-0 w-[112px] h-[112px]">
+                  {(() => {
+                    const ringR = 44;
+                    const ringC = 2 * Math.PI * ringR;
+                    const frac = wins / 7;
+                    const dash = frac * ringC;
+                    return (
+                      <svg className="w-full h-full -rotate-90" viewBox="0 0 112 112" aria-hidden>
+                        <circle cx="56" cy="56" r={ringR} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="10" />
+                        <circle
+                          cx="56"
+                          cy="56"
+                          r={ringR}
+                          fill="none"
+                          stroke="url(#cvvRingGrad)"
+                          strokeWidth="10"
+                          strokeLinecap="round"
+                          strokeDasharray={`${dash} ${ringC}`}
+                        />
+                        <defs>
+                          <linearGradient id="cvvRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#22d3ee" />
+                            <stop offset="100%" stopColor="#34d399" />
+                          </linearGradient>
+                        </defs>
+                      </svg>
+                    );
+                  })()}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+                    <div className="text-2xl font-bold tabular-nums leading-none">{wins}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mt-1">of 7</div>
+                  </div>
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="text-base font-semibold">{verdict.label}</div>
+                  <div className="text-sm text-slate-200/95">
+                    The ring encodes <span className="font-semibold tabular-nums">{wins}</span> of 7 metrics where this video beats{" "}
+                    {channelStats.name}&apos;s channel average (same winner rules as the table below).
+                  </div>
+                  {strongestAdvantage ? (
+                    <div className="text-xs text-slate-300">
+                      Strongest edge: {strongestAdvantage.name} ({strongestAdvantage.deltaText} raw spread).
+                    </div>
+                  ) : null}
+                  {verdict.trendNote ? (
+                    <div className="inline-flex rounded-full border border-indigo-400/30 bg-indigo-400/10 px-3 py-1 text-xs text-indigo-200">
+                      {verdict.trendNote}
+                    </div>
+                  ) : null}
                 </div>
               </div>
-              {strongestAdvantage ? (
-                <div className="mt-2 text-xs text-slate-300">
-                  Strongest advantage in {strongestAdvantage.name} ({strongestAdvantage.deltaText})
-                </div>
-              ) : null}
-              {verdict.trendNote ? (
-                <div className="mt-3 inline-flex rounded-full border border-indigo-400/30 bg-indigo-400/10 px-3 py-1 text-xs text-indigo-200">
-                  {verdict.trendNote}
-                </div>
-              ) : null}
             </div>
           ) : null}
 
+          {/* 2. Metric table with justification rows */}
           <Card className={`p-5 rounded-2xl overflow-x-auto ${premiumSurfaceClass}`}>
-            <div className="text-sm font-semibold mb-4">Metric table</div>
+            <div className="text-sm font-semibold mb-1">Metric table</div>
+            <div className="text-xs text-slate-500 mb-4">
+              Winner, difference, and priority come from the shared helpers; the row below explains the outcome.
+            </div>
             <table className="w-full text-sm min-w-[860px]">
               <thead>
                 <tr className="text-left text-slate-400 border-b border-white/10">
                   <th className="pb-2 pr-3">Metric</th>
                   <th className="pb-2 pr-3">Video value</th>
                   <th className="pb-2 pr-3">
-                    Channel avg <span className="text-slate-500">(avg {channelStats.completedCount} videos)</span>
+                    Channel avg <span className="text-slate-500">({channelStats.completedCount} videos)</span>
                   </th>
                   <th className="pb-2 pr-3">Difference</th>
                   <th className="pb-2">Winner</th>
                 </tr>
               </thead>
               <tbody>
-                {metrics.map((m) => {
-                  const w = computeWinner(m);
-                  const delta =
-                    m.video == null || m.channel == null
-                      ? null
-                      : m.kind === "lower"
-                        ? m.channel - m.video
-                        : m.kind === "wpm_opt"
-                          ? Math.abs(m.channel - 130) - Math.abs(m.video - 130)
-                          : m.video - m.channel;
-                  const deltaStr =
-                    delta == null
-                      ? "—"
-                      : m.format === "pct0"
-                        ? `${delta >= 0 ? "+" : ""}${Math.round(delta)}%`
-                        : m.format === "float1"
-                          ? `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}`
-                          : `${delta >= 0 ? "+" : ""}${Math.round(delta)}`;
-                  return (
-                    <tr key={m.key} className="border-b border-white/5">
+                {cvvMetricRows.map(({ m, w, deltaStr, pr, justification }) => (
+                  <Fragment key={m.key}>
+                    <tr className="border-b border-white/5">
                       <td className="py-3 pr-3">
                         <div className="text-slate-200">{m.name}</div>
                         <div className="text-xs text-slate-500">{m.subtitle}</div>
@@ -1044,69 +1268,60 @@ function CompareChannelVsVideoPane() {
                         <span className={clsx("inline-flex items-center px-2 py-1 rounded-full text-xs border", winnerBadge(w))}>
                           {w === "video" ? "Video" : w === "channel" ? "Channel" : "Tie"}
                         </span>
+                        <div className="mt-1 text-[10px] uppercase tracking-wide text-slate-500">Priority: {pr}</div>
                       </td>
                     </tr>
-                  );
-                })}
+                    <tr className="border-b border-white/10 bg-white/[0.02]">
+                      <td colSpan={5} className="py-2 px-3 text-xs text-slate-400 leading-relaxed">
+                        <span className="text-slate-500">Why: </span>
+                        {justification}
+                      </td>
+                    </tr>
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </Card>
 
-          {/* Visual bars grid (6 metrics) */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            {visualMetrics.map((m) => {
-              const w = computeWinner(m);
-              const v = m.video;
-              const c = m.channel;
-              const maxVal = Math.max(Number(v ?? 0), Number(c ?? 0), 1);
-
-              // Spec: bar heights normalized within metric; for "lower is better" (fillers),
-              // invert heights so lower value appears higher.
-              const scoreV = m.kind === "lower" ? (v == null ? 0 : Math.max(0, maxVal - v)) : v == null ? 0 : Math.max(0, v);
-              const scoreC = m.kind === "lower" ? (c == null ? 0 : Math.max(0, maxVal - c)) : c == null ? 0 : Math.max(0, c);
-              const maxScore = Math.max(scoreV, scoreC, 1);
-              const vH = v == null ? 0 : Math.round((scoreV / maxScore) * 100);
-              const cH = c == null ? 0 : Math.round((scoreC / maxScore) * 100);
-              const vColor =
-                w === "video" ? "bg-emerald-400" : w === "channel" ? "bg-amber-400" : "bg-slate-500";
-              return (
-                <Card key={m.key} className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
-                  <div className="text-sm font-semibold">{m.name}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">{m.subtitle}</div>
-                  <div className="mt-4 grid grid-cols-2 gap-4 items-end h-28">
-                    <div className="flex flex-col items-center justify-end gap-2">
-                      <div className="w-8 h-24 rounded-lg bg-white/5 border border-white/10 flex items-end overflow-hidden">
-                        <div className={clsx("w-full rounded-lg", vColor)} style={{ height: `${Math.max(4, vH)}%` }} />
-                      </div>
-                      <div className="text-xs text-slate-300">This video</div>
-                      <div className="text-xs text-slate-100 tabular-nums">{fmtVal(v, m.format)}</div>
-                    </div>
-                    <div className="flex flex-col items-center justify-end gap-2">
-                      <div className="w-8 h-24 rounded-lg bg-white/5 border border-white/10 flex items-end overflow-hidden">
-                        <div className="w-full rounded-lg bg-indigo-400" style={{ height: `${Math.max(4, cH)}%` }} />
-                      </div>
-                      <div className="text-xs text-slate-300">{channelStats.name} avg</div>
-                      <div className="text-xs text-slate-100 tabular-nums">{fmtVal(c, m.format)}</div>
-                    </div>
+          {/* 3. Strengths and gaps cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Card className={`p-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 ${premiumSurfaceClass}`}>
+              <div className="text-sm font-semibold text-emerald-200">Strengths vs channel</div>
+              <div className="text-xs text-slate-500">Metrics where the video wins the head-to-head.</div>
+              <div className="mt-3 space-y-2 text-sm text-slate-100">
+                {strengthsAndGaps.strengths.length ? (
+                  strengthsAndGaps.strengths.map((s, i) => <div key={i}>• {s}</div>)
+                ) : (
+                  <div className="text-slate-300">No clear wins yet.</div>
+                )}
+              </div>
+            </Card>
+            <Card className={`p-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 ${premiumSurfaceClass}`}>
+              <div className="text-sm font-semibold text-amber-200">Gaps &amp; ties</div>
+              <div className="mt-1 text-xs text-slate-500">Where the channel average wins, plus close ties.</div>
+              <div className="mt-3 space-y-2 text-sm text-slate-100">
+                {strengthsAndGaps.gaps.length ? (
+                  strengthsAndGaps.gaps.map((s, i) => <div key={i}>• {s}</div>)
+                ) : (
+                  <div className="text-slate-300">No clear gaps yet.</div>
+                )}
+                {strengthsAndGaps.ties.slice(0, 6).map((s, i) => (
+                  <div key={`t-${i}`} className="text-slate-300">
+                    • {s}
                   </div>
-                </Card>
-              );
-            })}
+                ))}
+                {verdict?.trendNote ? <div className="text-slate-300">• {verdict.trendNote}</div> : null}
+              </div>
+            </Card>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded bg-emerald-400" />
-              This video
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded bg-indigo-400" />
-              {channelStats.name} avg
-            </div>
-          </div>
-
+          {/* 4. Confidence over time chart with context text */}
           <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
             <div className="text-sm font-semibold">Confidence over time</div>
+            <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+              Purple bars are completed videos on this channel (chronological). The dashed horizontal line is this video&apos;s confidence (
+              {fmtVal(videoData.confidence, "int")}). Peer ranking uses the same confidence scores as this series.
+            </p>
             <div className="mt-4 h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={channelStats.confidenceSeries}>
@@ -1120,50 +1335,55 @@ function CompareChannelVsVideoPane() {
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            {confidenceRank ? (
-              <div className="mt-3 text-sm text-slate-300">
-                This video would rank <span className="font-semibold">#{confidenceRank.rank}</span> of{" "}
-                <span className="font-semibold">{confidenceRank.total}</span> in the channel
-              </div>
+            {channelStats.confidenceSeries.length === 0 ? (
+              <div className="mt-3 text-xs text-slate-500">No per-video confidence series yet for this channel.</div>
             ) : null}
           </Card>
 
-          {/* Strengths and gaps */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Card className={`p-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 ${premiumSurfaceClass}`}>
-              <div className="text-sm font-semibold text-emerald-200">Video strengths vs channel</div>
-              <div className="mt-3 space-y-2 text-sm text-slate-100">
-                {strengthsAndGaps.strengths.length ? (
-                  strengthsAndGaps.strengths.map((s, i) => <div key={i}>• {s}</div>)
-                ) : (
-                  <div className="text-slate-300">No clear wins yet.</div>
-                )}
+          {/* 5. Channel ranking with interpretation */}
+          {confidenceRank ? (
+            <Card className={`p-6 rounded-2xl ${premiumSurfaceClass}`}>
+              <div className="text-sm font-semibold text-center">Channel ranking</div>
+              <div className="mt-1 text-xs text-slate-500 text-center">Rank vs all videos in the report that have a confidence score.</div>
+              <div className="mt-4 text-center text-5xl font-bold tabular-nums">
+                #{confidenceRank.rank}{" "}
+                <span className="text-slate-400 text-2xl font-semibold">of {confidenceRank.total}</span>
               </div>
-            </Card>
-            <Card className={`p-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 ${premiumSurfaceClass}`}>
-              <div className="text-sm font-semibold text-amber-200">Areas to watch</div>
-              <div className="mt-3 space-y-2 text-sm text-slate-100">
-                {strengthsAndGaps.gaps.length ? (
-                  strengthsAndGaps.gaps.map((s, i) => <div key={i}>• {s}</div>)
-                ) : (
-                  <div className="text-slate-300">No clear gaps yet.</div>
+              <div
+                className={clsx(
+                  "mt-2 text-center text-sm font-medium",
+                  confidenceRank.percentile >= 67
+                    ? "text-emerald-200"
+                    : confidenceRank.percentile >= 34
+                      ? "text-amber-200"
+                      : "text-red-200"
                 )}
-                {strengthsAndGaps.ties.slice(0, 4).map((s, i) => (
-                  <div key={`t-${i}`} className="text-slate-300">
-                    • {s}
-                  </div>
-                ))}
-                {verdict?.trendNote ? <div className="text-slate-300">• {verdict.trendNote}</div> : null}
+              >
+                Top {confidenceRank.percentile}% among analysed videos in {channelStats.name}
               </div>
+              <p className="mt-4 text-sm text-slate-300 text-center max-w-xl mx-auto leading-relaxed">
+                {confidenceRank.percentile >= 67
+                  ? "Interpretation: this recording sits in the upper tier of confidence for the channel — leverage that consistency."
+                  : confidenceRank.percentile >= 34
+                    ? "Interpretation: mid-pack vs the channel — a few targeted fixes from the action plan could move you up."
+                    : "Interpretation: below the channel’s typical confidence on this sample — prioritise the high-priority actions below."}
+              </p>
             </Card>
-          </div>
+          ) : (
+            <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
+              <div className="text-sm font-semibold">Channel ranking</div>
+              <p className="mt-2 text-sm text-slate-400">
+                Needs this video&apos;s confidence and at least one peer score in the channel report.
+              </p>
+            </Card>
+          )}
 
-          {/* AI coach patterns comparison */}
+          {/* 6. AI coach comparison with ratio insight */}
           {coachPanels ? (
-            <>
+            <div className="space-y-3">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
-                  <div className="text-sm font-semibold">This video&apos;s issues</div>
+                  <div className="text-sm font-semibold">This video&apos;s coach notes</div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {coachPanels.videoTags.length ? (
                       coachPanels.videoTags.map(([t, n]) => (
@@ -1177,7 +1397,7 @@ function CompareChannelVsVideoPane() {
                   </div>
                 </Card>
                 <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
-                  <div className="text-sm font-semibold">Channel&apos;s recurring issues ({channelStats.completedCount} vids)</div>
+                  <div className="text-sm font-semibold">Channel recurring patterns ({channelStats.completedCount} vids)</div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {coachPanels.channelTags.map((p, i) => {
                       const n = Number(p.count || 0);
@@ -1196,28 +1416,53 @@ function CompareChannelVsVideoPane() {
                   </div>
                 </Card>
               </div>
-              <div className="text-sm text-slate-300">{coachPanels.insight}.</div>
-            </>
+              <Card className={`p-4 rounded-2xl border border-white/10 bg-white/[0.03] ${premiumSurfaceClass}`}>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Ratio insight</div>
+                {coachOverlap ? (
+                  <p className="mt-2 text-sm text-slate-200 leading-relaxed">
+                    <span className="tabular-nums font-semibold text-cyan-200">{coachOverlap.overlap}</span> of{" "}
+                    <span className="tabular-nums">{coachOverlap.denom}</span> top channel patterns also appear in this video&apos;s notes (
+                    <span className="tabular-nums font-semibold">{coachOverlap.ratioPct}%</span> overlap). Raw issue mentions: this video{" "}
+                    <span className="tabular-nums">{coachOverlap.videoIssueCount}</span> vs channel total weighted tags{" "}
+                    <span className="tabular-nums">{coachOverlap.channelIssueCount}</span> → ratio{" "}
+                    <span className="tabular-nums font-medium text-slate-100">{coachOverlap.issueRatio}</span> (video sum / channel sum).
+                  </p>
+                ) : null}
+                <p className="mt-2 text-sm text-slate-300">{coachPanels.insight}.</p>
+              </Card>
+            </div>
           ) : null}
 
-          {confidenceRank ? (
-            <Card className={`p-6 rounded-2xl text-center ${premiumSurfaceClass}`}>
-              <div className="text-sm font-semibold">Video ranking within channel</div>
-              <div className="mt-3 text-5xl font-bold">#{confidenceRank.rank} <span className="text-slate-400 text-2xl font-semibold">of {confidenceRank.total}</span></div>
-              <div
-                className={clsx(
-                  "mt-2 text-sm",
-                  confidenceRank.percentile >= 67
-                    ? "text-emerald-200"
-                    : confidenceRank.percentile >= 34
-                      ? "text-amber-200"
-                      : "text-red-200"
-                )}
-              >
-                Top {confidenceRank.percentile}% of all analysed videos in this channel
-              </div>
-            </Card>
-          ) : null}
+          {/* 7. Prioritised action plan */}
+          <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
+            <div className="text-sm font-semibold">Prioritised action plan</div>
+            <div className="mt-1 text-xs text-slate-500">
+              Sorted by impact priority (metric gaps, edges, coach overlap, and recent channel trend).
+            </div>
+            <ol className="mt-4 space-y-3 list-decimal list-inside text-sm text-slate-200">
+              {cvvActions.length ? (
+                cvvActions.map((a, i) => (
+                  <li key={`${a.metricKey}-${a.kind}-${i}`} className="leading-relaxed pl-1">
+                    <span
+                      className={clsx(
+                        "inline-flex align-middle mr-2 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide border",
+                        a.priority === "high"
+                          ? "border-rose-400/40 bg-rose-400/10 text-rose-200"
+                          : a.priority === "medium"
+                            ? "border-amber-400/35 bg-amber-400/10 text-amber-200"
+                            : "border-white/15 bg-white/5 text-slate-300"
+                      )}
+                    >
+                      {a.priority}
+                    </span>
+                    <span className="text-slate-500 text-xs">({a.kind})</span> {a.message}
+                  </li>
+                ))
+              ) : (
+                <li className="text-slate-400">No actions yet — complete metrics and coach data to populate this list.</li>
+              )}
+            </ol>
+          </Card>
         </>
       ) : null}
     </div>

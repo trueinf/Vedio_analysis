@@ -567,20 +567,18 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
 
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 backdrop-blur">
               <div className="text-sm font-semibold mb-3">Metrics</div>
-              <div className="grid grid-cols-12 gap-0">
-                <MetricsGrid
-                  show
-                  currentStepId="report"
-                  demoMetricValue={Number(metrics.raw.wpm) || 0}
-                  selectedMetric={selectedMetric}
-                  onSelectMetric={(m) => setSelectedMetric(m)}
-                  cards={metricCardsSnapshot}
-                  events={timelineEvents}
-                  durationSec={durationSec}
-                  eyeNotMeasurable={eyeNotMeasurable}
-                  metricDetailContext={null}
-                />
-              </div>
+              <MetricsGrid
+                show
+                currentStepId="report"
+                demoMetricValue={Number(metrics.raw.wpm) || 0}
+                selectedMetric={selectedMetric}
+                onSelectMetric={(m) => setSelectedMetric(m)}
+                cards={metricCardsSnapshot}
+                events={timelineEvents}
+                durationSec={durationSec}
+                eyeNotMeasurable={eyeNotMeasurable}
+                metricDetailContext={null}
+              />
             </div>
 
             <Timeline events={timelineEvents} durationSec={durationSec} currentTime={currentTime} onSeek={(t) => seekTo(t, { scrollIntoView: true })} />
