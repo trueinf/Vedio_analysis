@@ -38,7 +38,7 @@ export function MetricDetailModal(props: {
         aria-label="Close details"
         onClick={onClose}
       />
-      <div className="relative w-full sm:max-w-2xl max-h-[88vh] sm:max-h-[92vh] overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/15 bg-slate-900/95 text-white shadow-2xl flex flex-col">
+      <div className="relative w-full sm:max-w-3xl lg:max-w-4xl max-h-[88vh] sm:max-h-[92vh] overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/15 bg-slate-900/95 text-white shadow-2xl flex flex-col">
         <div className="flex items-start justify-between gap-3 p-4 border-b border-white/10 shrink-0">
           <div>
             <h2 id="metric-detail-title" className="text-lg font-semibold tracking-tight">

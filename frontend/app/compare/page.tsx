@@ -426,6 +426,8 @@ type VideoResult = {
   fillersPerMin: number | null;
   gesturesPerMin: number | null;
   tonalScore: number | null;
+  /** Expression changes per minute (from vision card / duration). */
+  expressionPerMin: number | null;
   coachComments: string[];
   resultJson: any | null;
 };
@@ -436,6 +438,59 @@ function safeAvg(nums: Array<number | null | undefined>): number | null {
     .filter((n): n is number => n != null && Number.isFinite(n));
   if (!ok.length) return null;
   return ok.reduce((a, b) => a + b, 0) / ok.length;
+}
+
+function eyeRatioToPctChannel(e: number | null | undefined): number | null {
+  if (e == null || !Number.isFinite(Number(e))) return null;
+  const n = Number(e);
+  return n <= 1 ? Math.round(n * 100) : Math.round(n);
+}
+
+function sortedFiniteNums(nums: number[]): number[] {
+  return nums.filter((n) => Number.isFinite(n)).slice().sort((a, b) => a - b);
+}
+
+type CvvMetricDistribution = {
+  count: number;
+  min: number;
+  max: number;
+  median: number;
+};
+
+function distributionFromValues(values: number[]): CvvMetricDistribution | null {
+  const s = sortedFiniteNums(values);
+  if (!s.length) return null;
+  const mid = Math.floor(s.length / 2);
+  const median = s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  return { count: s.length, min: s[0], max: s[s.length - 1], median };
+}
+
+function percentileHigherBetter(videoVal: number, channelVals: number[]): number | null {
+  const ok = sortedFiniteNums(channelVals);
+  if (!ok.length) return null;
+  const below = ok.filter((c) => c < videoVal).length;
+  return Math.round((below / ok.length) * 100);
+}
+
+function percentileLowerBetter(videoVal: number, channelVals: number[]): number | null {
+  const ok = sortedFiniteNums(channelVals);
+  if (!ok.length) return null;
+  const above = ok.filter((c) => c > videoVal).length;
+  return Math.round((above / ok.length) * 100);
+}
+
+function percentileWpmCloserToTarget(videoVal: number, channelVals: number[], target: number): number | null {
+  const ok = sortedFiniteNums(channelVals);
+  if (!ok.length) return null;
+  const dv = Math.abs(videoVal - target);
+  const farther = ok.filter((c) => Math.abs(c - target) > dv).length;
+  return Math.round((farther / ok.length) * 100);
+}
+
+function formatDistNumber(m: CvvMetric, v: number): string {
+  if (m.format === "pct0") return `${Math.round(v)}%`;
+  if (m.format === "float1") return v.toFixed(1);
+  return String(Math.round(v));
 }
 
 function computeVideoResult(detail: AnalysisDetail | null): VideoResult | null {
@@ -458,6 +513,12 @@ function computeVideoResult(detail: AnalysisDetail | null): VideoResult | null {
     typeof cards?.tonal_variation?.score === "number"
       ? safeNum(cards?.tonal_variation?.score)
       : safeNum(cards?.tonal_variation?.pitch_hz?.std);
+  const summaryDur = safeNum(rj?.summary?.duration_sec ?? analysis?.duration_sec ?? job?.duration_sec);
+  const exprChanges = safeNum(cards?.expressions?.change_count);
+  const expressionPerMin =
+    exprChanges != null && summaryDur != null && summaryDur > 0
+      ? Number((exprChanges / (summaryDur / 60)).toFixed(1))
+      : null;
   const coachComments = Array.isArray(rj?.coach_comments)
     ? (rj.coach_comments as any[])
         .map((c) => String(c?.comment || "").trim())
@@ -474,6 +535,7 @@ function computeVideoResult(detail: AnalysisDetail | null): VideoResult | null {
     fillersPerMin: fillersPerMin == null ? null : Number(fillersPerMin.toFixed(1)),
     gesturesPerMin: gesturesPerMin == null ? null : Number(gesturesPerMin.toFixed(1)),
     tonalScore: tonalScore == null ? null : Number(tonalScore.toFixed(1)),
+    expressionPerMin,
     coachComments,
     resultJson: rj,
   };
@@ -491,7 +553,7 @@ function deltaTone(w: "video" | "channel" | "tie") {
   return "text-slate-300";
 }
 
-type CvvMetricKey = "confidence" | "energy" | "wpm" | "eye" | "fillers" | "gestures" | "tonal";
+type CvvMetricKey = "confidence" | "energy" | "wpm" | "eye" | "fillers" | "gestures" | "tonal" | "expression";
 type CvvMetric = {
   key: CvvMetricKey;
   name: string;
@@ -685,6 +747,94 @@ function fmtDeltaCvv(m: CvvMetric, delta: number | null): string {
   return `${delta >= 0 ? "+" : ""}${Math.round(delta)}`;
 }
 
+function buildCvvWhyText(
+  m: CvvMetric,
+  w: "video" | "channel" | "tie",
+  pr: "high" | "medium" | "low",
+  delta: number | null,
+  peers: number[] | undefined,
+  dist: CvvMetricDistribution | null | undefined,
+  opts: {
+    confidenceTrendNote: string | null;
+    completedVideosLabel: number;
+  }
+): string {
+  const parts: string[] = [];
+  const v = m.video;
+  const c = m.channel;
+
+  if (v == null || c == null) {
+    return "Missing video or channel benchmark data for this metric.";
+  }
+
+  if (m.key === "wpm" && v === 0) {
+    parts.push(
+      "WPM is 0 — often no counted speech or timing in this analysis. Treat the channel comparison cautiously until speech rate is non-zero."
+    );
+  }
+
+  if (m.key === "confidence" && opts.confidenceTrendNote) {
+    parts.push(`Channel report trend: ${opts.confidenceTrendNote}`);
+  }
+
+  if (dist && dist.count > 0) {
+    parts.push(
+      `Peer spread (${dist.count}/${opts.completedVideosLabel} videos with data): min ${formatDistNumber(m, dist.min)}, median ${formatDistNumber(m, dist.median)}, max ${formatDistNumber(m, dist.max)}.`
+    );
+    if (peers && peers.length && v != null) {
+      let p: number | null = null;
+      if (m.kind === "lower") p = percentileLowerBetter(v, peers);
+      else if (m.kind === "wpm_opt") p = percentileWpmCloserToTarget(v, peers, CVV_WPM_TARGET);
+      else p = percentileHigherBetter(v, peers);
+      if (p != null) {
+        if (m.kind === "lower") {
+          parts.push(
+            `You have fewer fillers than ${p}% of channel videos with data (lower is better).`
+          );
+        } else if (m.kind === "wpm_opt") {
+          parts.push(
+            `You are closer to the ${CVV_WPM_TARGET} WPM target than ${p}% of channel videos with data.`
+          );
+        } else {
+          parts.push(`You score higher than ${p}% of channel videos with data on this metric.`);
+        }
+      }
+    }
+  } else {
+    parts.push("No per-video values in the channel report for this metric — only the rolled-up average is shown.");
+  }
+
+  if (w === "tie") {
+    parts.push(
+      m.kind === "wpm_opt"
+        ? `Head-to-head tie: both sides are similarly close to the ${CVV_WPM_TARGET} WPM target.`
+        : m.kind === "lower"
+          ? "Head-to-head tie: filler rates are within the tie band."
+          : "Head-to-head tie: values are within the ±2 tie band for this metric."
+    );
+  } else if (m.kind === "wpm_opt") {
+    parts.push(
+      w === "video"
+        ? `This video is closer to the optimal ${CVV_WPM_TARGET} WPM than the channel average.`
+        : `The channel average is closer to ${CVV_WPM_TARGET} WPM than this video.`
+    );
+  } else if (m.kind === "lower") {
+    parts.push(
+      w === "video"
+        ? `Fewer fillers per minute than the channel average (impact: ${pr}).`
+        : `More fillers per minute than the channel average (impact: ${pr}).`
+    );
+  } else {
+    parts.push(
+      w === "video"
+        ? `Higher than the channel average (raw gap ${delta == null ? "—" : fmtDeltaCvv(m, delta)}, impact: ${pr}).`
+        : `Lower than the channel average (raw gap ${delta == null ? "—" : fmtDeltaCvv(m, delta)}, impact: ${pr}).`
+    );
+  }
+
+  return parts.join(" ");
+}
+
 function CompareChannelVsVideoPane() {
   const [loadingChannels, setLoadingChannels] = useState(true);
   const [channelList, setChannelList] = useState<ChannelSummary[]>([]);
@@ -835,24 +985,82 @@ function CompareChannelVsVideoPane() {
       if (!Number.isFinite(e)) return null;
       return e <= 1 ? Math.round(e * 100) : Math.round(e);
     })();
-    const fillersAvg = safeAvg((rep.individual_videos || []).map((v: any) => v?.metrics?.filler_rate));
-    const gesturesAvg = safeAvg((rep.individual_videos || []).map((v: any) => v?.metrics?.gesture_rate));
-    const tonalAvg = safeAvg((rep.individual_videos || []).map((v: any) => v?.metrics?.tonal_variation));
+    const individuals = (rep.individual_videos || []) as any[];
+    const fillersAvg = safeAvg(individuals.map((v: any) => v?.metrics?.filler_rate));
+    const gesturesAvg = safeAvg(individuals.map((v: any) => v?.metrics?.gesture_rate));
+    const tonalAvg = safeAvg(individuals.map((v: any) => v?.metrics?.tonal_variation));
+    const expressionAvg = safeAvg(individuals.map((v: any) => v?.metrics?.expression_change));
+
+    const peerValues: Record<CvvMetricKey, number[]> = {
+      confidence: [],
+      energy: [],
+      wpm: [],
+      eye: [],
+      fillers: [],
+      gestures: [],
+      tonal: [],
+      expression: [],
+    };
+    for (const v of individuals) {
+      const cs = Number(v?.confidence_score);
+      if (Number.isFinite(cs)) peerValues.confidence.push(cs);
+      const en = Number(v?.energy_score);
+      if (Number.isFinite(en)) peerValues.energy.push(en);
+      const wpm = Number(v?.metrics?.speech_rate_wpm);
+      if (Number.isFinite(wpm)) peerValues.wpm.push(wpm);
+      const eye = eyeRatioToPctChannel(v?.eye_contact_ratio);
+      if (eye != null) peerValues.eye.push(eye);
+      const fil = Number(v?.metrics?.filler_rate);
+      if (Number.isFinite(fil)) peerValues.fillers.push(fil);
+      const ges = Number(v?.metrics?.gesture_rate);
+      if (Number.isFinite(ges)) peerValues.gestures.push(ges);
+      const ton = Number(v?.metrics?.tonal_variation);
+      if (Number.isFinite(ton)) peerValues.tonal.push(ton);
+      const ex = Number(v?.metrics?.expression_change);
+      if (Number.isFinite(ex)) peerValues.expression.push(ex);
+    }
+
+    const distributionByMetric: Record<CvvMetricKey, CvvMetricDistribution | null> = {
+      confidence: distributionFromValues(peerValues.confidence),
+      energy: distributionFromValues(peerValues.energy),
+      wpm: distributionFromValues(peerValues.wpm),
+      eye: distributionFromValues(peerValues.eye),
+      fillers: distributionFromValues(peerValues.fillers),
+      gestures: distributionFromValues(peerValues.gestures),
+      tonal: distributionFromValues(peerValues.tonal),
+      expression: distributionFromValues(peerValues.expression),
+    };
+
+    const trendRaw = rep.confidence_trend as string | null | undefined;
+    const confidenceTrend =
+      trendRaw === "improving" || trendRaw === "declining" || trendRaw === "stable" ? trendRaw : null;
+
     return {
       name: ch.name,
       totalVideos: Number(ch.totalVideos || 0),
       completedCount: Number(ch.completedCount || 0),
+      reportCompletedVideos: Number(rep.completed_videos ?? individuals.length ?? 0),
       avgConfidence: Math.round(Number(ch.avgConfidence ?? 0) || 0),
+      reportAvgConfidence: Number(rep.avg_confidence ?? ch.avgConfidence ?? 0) || null,
       avgEnergy: Math.round(Number(ch.avgEnergy ?? 0) || 0),
+      reportAvgEnergy: Number(rep.avg_energy ?? ch.avgEnergy ?? 0) || null,
       avgWpm: Math.round(Number(rep.avg_wpm ?? 0) || 0) || null,
       avgEyePct: eyePct,
       avgFillers: fillersAvg == null ? null : Number(fillersAvg.toFixed(1)),
       avgGestures: gesturesAvg == null ? null : Number(gesturesAvg.toFixed(1)),
       avgTonal: tonalAvg == null ? null : Number(tonalAvg.toFixed(1)),
+      avgExpression: expressionAvg == null ? null : Number(expressionAvg.toFixed(1)),
       recentAvgConfidence: ch.recentAvgConfidence == null ? null : Number(ch.recentAvgConfidence),
       previousAvgConfidence: ch.previousAvgConfidence == null ? null : Number(ch.previousAvgConfidence),
+      reportRecentAvgConfidence: rep.recent_avg_confidence == null ? null : Number(rep.recent_avg_confidence),
+      reportPreviousAvgConfidence: rep.previous_avg_confidence == null ? null : Number(rep.previous_avg_confidence),
       topCoach: (rep.top_coach_patterns || []) as { comment: string; count: number }[],
-      confidenceSeries: (rep.individual_videos || [])
+      confidenceTrend,
+      bestVideos: (rep.best_videos || []) as { filename: string; confidence: number | null; analysis_id: string }[],
+      worstVideos: (rep.worst_videos || []) as { filename: string; confidence: number | null; analysis_id: string }[],
+      peerValuesByMetric: peerValues,
+      distributionByMetric,
+      confidenceSeries: individuals
         .filter((v: any) => v?.confidence_score != null && v?.created_at)
         .slice()
         .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
@@ -860,9 +1068,7 @@ function CompareChannelVsVideoPane() {
           x: new Date(String(v.created_at)).toLocaleDateString("en-US", { month: "short", day: "2-digit" }),
           confidence: Number(v.confidence_score),
         })),
-      confidenceRankList: (rep.individual_videos || [])
-        .filter((v: any) => v?.confidence_score != null)
-        .map((v: any) => Number(v.confidence_score)),
+      confidenceRankList: individuals.filter((v: any) => v?.confidence_score != null).map((v: any) => Number(v.confidence_score)),
     };
   }, [channelSummary, channelReport]);
 
@@ -876,26 +1082,53 @@ function CompareChannelVsVideoPane() {
       { key: "fillers", name: "Filler words", subtitle: "Lower is better", video: videoData.fillersPerMin, channel: channelStats.avgFillers, format: "float1", kind: "lower" },
       { key: "gestures", name: "Gestures", subtitle: "Higher is better (up to ~20/min)", video: videoData.gesturesPerMin, channel: channelStats.avgGestures, format: "float1", kind: "higher" },
       { key: "tonal", name: "Tonal variation", subtitle: "Higher is better", video: videoData.tonalScore, channel: channelStats.avgTonal, format: "float1", kind: "higher" },
+      {
+        key: "expression",
+        name: "Expression changes",
+        subtitle: "Higher is better (face variety / min)",
+        video: videoData.expressionPerMin,
+        channel: channelStats.avgExpression,
+        format: "float1",
+        kind: "higher",
+      },
     ];
   }, [channelStats, videoData]);
 
+  const metricTotal = metrics.length || 1;
   const wins = useMemo(() => metrics.filter((m) => computeWinner(m) === "video").length, [metrics]);
 
   const verdict = useMemo(() => {
     if (!channelStats) return null;
-    const label = wins >= 5 ? "Above channel average" : wins >= 3 ? "On par with channel" : "Below channel average";
-    const tone = wins >= 5 ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" : wins >= 3 ? "border-amber-400/30 bg-amber-400/10 text-amber-200" : "border-white/10 bg-white/5 text-slate-200";
+    const aboveAt = Math.ceil(metricTotal * (5 / 7));
+    const parAt = Math.ceil(metricTotal * (3 / 7));
+    const label =
+      wins >= aboveAt ? "Above channel average" : wins >= parAt ? "On par with channel" : "Below channel average";
+    const tone =
+      wins >= aboveAt
+        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+        : wins >= parAt
+          ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+          : "border-white/10 bg-white/5 text-slate-200";
     const trendNote = (() => {
+      const bits: string[] = [];
+      const ct = channelStats.confidenceTrend;
+      if (ct === "improving") bits.push(`Report trend: ${channelStats.name}'s confidence trajectory is improving.`);
+      else if (ct === "declining") bits.push(`Report trend: ${channelStats.name}'s confidence trajectory is declining.`);
+      else if (ct === "stable") bits.push(`Report trend: ${channelStats.name}'s confidence trajectory is stable.`);
       const ra = channelStats.recentAvgConfidence;
       const pa = channelStats.previousAvgConfidence;
-      if (ra == null || pa == null) return "";
-      const d = Math.round(ra - pa);
-      if (d > 3) return `Channel trend: ${channelStats.name}'s confidence is improving (+${d} pts over last 5 videos) — the benchmark is rising`;
-      if (d < -3) return `Channel trend: ${channelStats.name}'s confidence is declining (${d} pts) — benchmark is falling`;
-      return "";
+      if (ra != null && pa != null) {
+        const d = Math.round(ra - pa);
+        if (d > 3) {
+          bits.push(`Recent batch vs prior: +${d} pts on confidence — the benchmark is rising.`);
+        } else if (d < -3) {
+          bits.push(`Recent batch vs prior: ${d} pts on confidence — benchmark is falling.`);
+        }
+      }
+      return bits.join(" ");
     })();
     return { label, tone, trendNote };
-  }, [channelStats, wins]);
+  }, [channelStats, wins, metricTotal]);
 
   const strongestAdvantage = useMemo(() => {
     if (!channelStats || !videoData) return null;
@@ -927,40 +1160,25 @@ function CompareChannelVsVideoPane() {
   );
 
   const cvvMetricRows = useMemo(() => {
+    if (!channelStats) return [];
+    const confidenceTrendNote =
+      channelStats.confidenceTrend != null
+        ? `the channel report flags overall confidence as ${channelStats.confidenceTrend}.`
+        : null;
     return metrics.map((m) => {
       const w = getWinner(m, m.video, m.channel);
       const delta = getDelta(m, m.video, m.channel);
       const pr = getPriority(m, delta);
       const deltaStr = fmtDeltaCvv(m, delta);
-      let justification = "";
-      if (m.video == null || m.channel == null) {
-        justification = "Missing video or channel benchmark data for this metric.";
-      } else if (w === "tie") {
-        justification =
-          m.kind === "wpm_opt"
-            ? `Both sides are similarly close to the ${CVV_WPM_TARGET} WPM target.`
-            : m.kind === "lower"
-              ? "Filler rates are within the tie band for this metric."
-              : "Values are within the tie band (±2) for this metric.";
-      } else if (m.kind === "wpm_opt") {
-        justification =
-          w === "video"
-            ? `This video is closer to the optimal ${CVV_WPM_TARGET} WPM than the channel average.`
-            : `The channel average is closer to ${CVV_WPM_TARGET} WPM than this video.`;
-      } else if (m.kind === "lower") {
-        justification =
-          w === "video"
-            ? `Fewer fillers per minute than the channel average (gap priority: ${pr}).`
-            : `More fillers per minute than the channel average (gap priority: ${pr}).`;
-      } else {
-        justification =
-          w === "video"
-            ? `Higher than the channel average (gap priority: ${pr}).`
-            : `Lower than the channel average (gap priority: ${pr}).`;
-      }
+      const peers = channelStats.peerValuesByMetric[m.key];
+      const dist = channelStats.distributionByMetric[m.key];
+      const justification = buildCvvWhyText(m, w, pr, delta, peers, dist, {
+        confidenceTrendNote,
+        completedVideosLabel: channelStats.completedCount,
+      });
       return { m, w, delta, deltaStr, pr, justification };
     });
-  }, [metrics]);
+  }, [metrics, channelStats]);
 
   const strengthsAndGaps = useMemo(() => {
     if (!channelStats || !videoData) return { strengths: [] as string[], gaps: [] as string[], ties: [] as string[] };
@@ -985,10 +1203,12 @@ function CompareChannelVsVideoPane() {
         if (m.key === "eye") strengths.push(`Eye contact ${deltaText} better than channel avg`);
         else if (m.key === "fillers") strengths.push(`Fewer filler words (${fmtVal(v, m.format)} vs ${fmtVal(c, m.format)}/min)`);
         else if (m.key === "tonal") strengths.push(`Higher tonal variation — more expressive`);
+        else if (m.key === "expression") strengths.push(`More expression changes per minute (${fmtVal(v, m.format)} vs ${fmtVal(c, m.format)})`);
         else strengths.push(`${m.name} ${deltaText} better than channel avg`);
       } else if (w === "channel") {
         if (m.key === "fillers") gaps.push(`More filler words (${fmtVal(v, m.format)} vs ${fmtVal(c, m.format)}/min)`);
         else if (m.key === "wpm") gaps.push(`Speech rate further from optimal 130 WPM than channel avg`);
+        else if (m.key === "expression") gaps.push(`Expression changes behind channel avg by ${deltaText}/min`);
         else gaps.push(`${m.name} behind channel avg by ${deltaText}`);
       } else {
         ties.push(`${m.name} is on par with channel avg`);
@@ -1076,6 +1296,7 @@ function CompareChannelVsVideoPane() {
                 <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">WPM {channelStats.avgWpm ?? "—"}</span>
                 <span className="px-2 py-1 rounded-full text-[11px] border border-emerald-400/25 bg-emerald-400/10 text-emerald-200">Eye {channelStats.avgEyePct ?? "—"}%</span>
                 <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">Fillers {channelStats.avgFillers ?? "—"}/min</span>
+                <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">Expr {channelStats.avgExpression ?? "—"}/min</span>
               </div>
             </div>
           ) : null}
@@ -1165,6 +1386,7 @@ function CompareChannelVsVideoPane() {
                 <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">WPM {videoData.wpm ?? "—"}</span>
                 <span className="px-2 py-1 rounded-full text-[11px] border border-emerald-400/25 bg-emerald-400/10 text-emerald-200">Eye {videoData.eyePct ?? "—"}%</span>
                 <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">Fillers {videoData.fillersPerMin ?? "—"}/min</span>
+                <span className="px-2 py-1 rounded-full text-[11px] border border-white/10 bg-white/5 text-slate-200">Expr {videoData.expressionPerMin ?? "—"}/min</span>
               </div>
             </div>
           ) : null}
@@ -1185,7 +1407,7 @@ function CompareChannelVsVideoPane() {
                   {(() => {
                     const ringR = 44;
                     const ringC = 2 * Math.PI * ringR;
-                    const frac = wins / 7;
+                    const frac = wins / metricTotal;
                     const dash = frac * ringC;
                     return (
                       <svg className="w-full h-full -rotate-90" viewBox="0 0 112 112" aria-hidden>
@@ -1211,13 +1433,13 @@ function CompareChannelVsVideoPane() {
                   })()}
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
                     <div className="text-2xl font-bold tabular-nums leading-none">{wins}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mt-1">of 7</div>
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mt-1">of {metricTotal}</div>
                   </div>
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                   <div className="text-base font-semibold">{verdict.label}</div>
                   <div className="text-sm text-slate-200/95">
-                    The ring encodes <span className="font-semibold tabular-nums">{wins}</span> of 7 metrics where this video beats{" "}
+                    The ring encodes <span className="font-semibold tabular-nums">{wins}</span> of {metricTotal} metrics where this video beats{" "}
                     {channelStats.name}&apos;s channel average (same winner rules as the table below).
                   </div>
                   {strongestAdvantage ? (
@@ -1235,11 +1457,63 @@ function CompareChannelVsVideoPane() {
             </div>
           ) : null}
 
+          {/* Channel report benchmarks (best/worst + report avgs) */}
+          <Card className={`p-4 rounded-2xl border border-white/10 bg-white/[0.03] ${premiumSurfaceClass}`}>
+            <div className="text-sm font-semibold">Channel report context</div>
+            <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+              Averages in the table use your dashboard channel summary where noted; &quot;Why&quot; rows add min/median/max and percentiles from{" "}
+              <span className="text-slate-300">individual_videos</span> in the channel report ({channelStats.completedCount} completed in summary).
+            </p>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-300">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="font-semibold text-emerald-200/90 mb-2">Strongest videos (report)</div>
+                {channelStats.bestVideos.length ? (
+                  <ul className="space-y-1.5">
+                    {channelStats.bestVideos.slice(0, 3).map((v, i) => (
+                      <li key={`${v.analysis_id}-${i}`} className="truncate" title={v.filename}>
+                        <span className="text-slate-400 tabular-nums">{v.confidence ?? "—"}</span> · {v.filename}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-slate-500">No best-videos list from the report.</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="font-semibold text-amber-200/90 mb-2">Lowest confidence samples (report)</div>
+                {channelStats.worstVideos.length ? (
+                  <ul className="space-y-1.5">
+                    {channelStats.worstVideos.slice(0, 3).map((v, i) => (
+                      <li key={`${v.analysis_id}-w-${i}`} className="truncate" title={v.filename}>
+                        <span className="text-slate-400 tabular-nums">{v.confidence ?? "—"}</span> · {v.filename}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-slate-500">No worst-videos list from the report.</div>
+                )}
+              </div>
+            </div>
+            {channelStats.reportAvgConfidence != null ? (
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-400">
+                <span className="px-2 py-1 rounded-md border border-white/10 bg-white/5">
+                  Report avg confidence: <span className="text-slate-200 tabular-nums">{Math.round(channelStats.reportAvgConfidence)}</span>
+                </span>
+                {channelStats.reportAvgEnergy != null ? (
+                  <span className="px-2 py-1 rounded-md border border-white/10 bg-white/5">
+                    Report avg energy: <span className="text-slate-200 tabular-nums">{Math.round(channelStats.reportAvgEnergy)}</span>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </Card>
+
           {/* 2. Metric table with justification rows */}
           <Card className={`p-5 rounded-2xl overflow-x-auto ${premiumSurfaceClass}`}>
             <div className="text-sm font-semibold mb-1">Metric table</div>
             <div className="text-xs text-slate-500 mb-4">
-              Winner, difference, and priority come from the shared helpers; the row below explains the outcome.
+              Winner, difference, and priority use the shared helpers. Each &quot;Why&quot; row adds peer distribution (min/median/max, sample count) and
+              percentile vs other videos on this channel where data exists.
             </div>
             <table className="w-full text-sm min-w-[860px]">
               <thead>
@@ -1322,8 +1596,8 @@ function CompareChannelVsVideoPane() {
               Purple bars are completed videos on this channel (chronological). The dashed horizontal line is this video&apos;s confidence (
               {fmtVal(videoData.confidence, "int")}). Peer ranking uses the same confidence scores as this series.
             </p>
-            <div className="mt-4 h-72">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="mt-4 h-72 min-h-[288px] w-full min-w-0">
+              <ResponsiveContainer width="100%" height="100%" minHeight={288}>
                 <BarChart data={channelStats.confidenceSeries}>
                   <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
                   <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
