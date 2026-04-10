@@ -69,6 +69,13 @@ function HistBar(props: { labels: string[]; counts: number[] }) {
   const counts = props.counts || [];
   const max = counts.length ? Math.max(...counts.map((x) => Number(x) || 0)) : 0;
   if (!labels.length || !counts.length || max <= 0) return null;
+  let bestIdx = 0;
+  for (let i = 1; i < counts.length; i++) {
+    const a = Number(counts[i] ?? 0) || 0;
+    const b = Number(counts[bestIdx] ?? 0) || 0;
+    if (a > b) bestIdx = i;
+  }
+  const bestLabel = labels[bestIdx] ?? "";
   return (
     <div className="mt-2 space-y-1">
       {labels.map((lab, i) => {
@@ -86,6 +93,11 @@ function HistBar(props: { labels: string[]; counts: number[] }) {
           </div>
         );
       })}
+      {bestLabel ? (
+        <div className="pt-1 text-[10px] text-slate-500">
+          Most common: <span className="text-slate-300">{bestLabel}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
