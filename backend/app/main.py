@@ -1053,6 +1053,7 @@ def create_app() -> FastAPI:
                 "channel_name": name,
                 "total_videos": 0,
                 "completed_videos": 0,
+                "total_duration_sec": 0,
                 "avg_confidence": 0.0,
                 "avg_energy": 0.0,
                 "avg_wpm": 0.0,
@@ -1237,6 +1238,10 @@ def create_app() -> FastAPI:
         total_videos = len(rows)
         completed_rows = [r for r in rows if str(r.get("status") or "") == "completed"]
         completed_videos = len(completed_rows)
+
+        # Total runtime across all completed videos (seconds).
+        dur_vals = [_f(r.get("duration_sec")) for r in completed_rows]
+        total_duration_sec = int(sum([float(v) for v in dur_vals if v is not None and float(v) > 0.0]) or 0)
 
         confs = [_f(r.get("confidence_score")) for r in completed_rows]
         engs = [_f(r.get("energy_score")) for r in completed_rows]
@@ -1429,6 +1434,7 @@ def create_app() -> FastAPI:
             "channel_name": name,
             "total_videos": int(total_videos),
             "completed_videos": int(completed_videos),
+            "total_duration_sec": int(total_duration_sec),
             "avg_confidence": avg_conf,
             "avg_energy": avg_energy,
             "avg_wpm": avg_wpm,

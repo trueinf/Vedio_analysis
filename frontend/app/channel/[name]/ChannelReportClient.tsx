@@ -102,6 +102,14 @@ function HistBar(props: { labels: string[]; counts: number[] }) {
   );
 }
 
+function formatDurationChip(totalSec: number): string {
+  const s = Math.max(0, Math.floor(Number(totalSec || 0)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
 export default function ChannelReportClient(props: { encodedName: string }) {
   const rawName = useMemo(() => {
     try {
@@ -383,6 +391,10 @@ export default function ChannelReportClient(props: { encodedName: string }) {
               { label: "Benchmark Energy (p50)", value: loading ? "—" : String(totals.benchEnergy) },
               { label: "Benchmark WPM (p50)", value: loading ? "—" : String(totals.benchWpm) },
               { label: "Benchmark Eye (p50)", value: loading ? "—" : `${totals.benchEye}%` },
+              {
+                label: "Total runtime",
+                value: loading ? "—" : formatDurationChip(Number(report?.total_duration_sec ?? 0)),
+              },
             ].map((p) => (
               <div
                 key={p.label}

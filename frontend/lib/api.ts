@@ -230,6 +230,7 @@ export type ChannelReport = {
   channel_name: string;
   total_videos: number;
   completed_videos: number;
+  total_duration_sec?: number;
   avg_confidence: number;
   avg_energy: number;
   avg_wpm: number;
