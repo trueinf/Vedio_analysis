@@ -1065,14 +1065,14 @@ def create_app() -> FastAPI:
                 "worst_videos": [],
                 "confidence_over_time": [],
                 "benchmark": {
-                    "confidence": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "energy": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "wpm": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "eye_contact_pct": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "fillers_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "gestures_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "tonal": {"n": 0, "p25": None, "p50": None, "p75": None},
-                    "expression_changes_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "confidence": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "energy": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "wpm": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "eye_contact_pct": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "fillers_per_min": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "gestures_per_min": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "tonal": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
+                    "expression_changes_per_min": {"n": 0, "missing": 0, "p10": None, "p25": None, "p50": None, "p75": None, "p90": None, "hist": {"labels": [], "counts": []}},
                 },
                 "individual_videos": [],
             }
@@ -1109,14 +1109,130 @@ def create_app() -> FastAPI:
             d1 = sorted_vals[c] * (k - f)
             return float(d0 + d1)
 
-        def _bench(values: list[float | None]) -> dict:
+        def _clamp(v: float, lo: float, hi: float) -> float:
+            return lo if v < lo else hi if v > hi else v
+
+        def _hist_fixed(values: list[float], edges: list[float], labels: list[str]) -> dict[str, list]:
+            """
+            Histogram with fixed bin edges.
+            edges: monotonic list of boundaries, length = len(labels)+1.
+            """
+            counts = [0 for _ in labels]
+            for x in values:
+                for i in range(len(labels)):
+                    lo = edges[i]
+                    hi = edges[i + 1]
+                    if i == len(labels) - 1:
+                        if x >= lo and x <= hi:
+                            counts[i] += 1
+                            break
+                    else:
+                        if x >= lo and x < hi:
+                            counts[i] += 1
+                            break
+            return {"labels": labels, "counts": counts}
+
+        def _hist_by_predicates(values: list[float], buckets: list[tuple[str, callable]]) -> dict[str, list]:
+            counts = [0 for _ in buckets]
+            for x in values:
+                for i, (_, pred) in enumerate(buckets):
+                    if pred(x):
+                        counts[i] += 1
+                        break
+            return {"labels": [b[0] for b in buckets], "counts": counts}
+
+        def _bench(values: list[float | None], *, total_expected: int, metric_key: str) -> dict:
             vals = sorted([float(v) for v in values if v is not None])
-            return {
-                "n": int(len(vals)),
+            n = int(len(vals))
+            missing = int(max(0, int(total_expected) - n))
+            out = {
+                "n": n,
+                "missing": missing,
+                "p10": _round1(_percentile(vals, 10)),
                 "p25": _round1(_percentile(vals, 25)),
                 "p50": _round1(_percentile(vals, 50)),
                 "p75": _round1(_percentile(vals, 75)),
+                "p90": _round1(_percentile(vals, 90)),
+                "hist": {"labels": [], "counts": []},
             }
+
+            if not vals:
+                return out
+
+            # Buckets per metric (matches UI guidance and existing label thresholds).
+            if metric_key in ("confidence", "energy"):
+                clamped = [_clamp(v, 0.0, 100.0) for v in vals]
+                out["hist"] = _hist_fixed(
+                    clamped,
+                    [0.0, 50.0, 70.0, 85.0, 100.0],
+                    ["0–49", "50–69", "70–84", "85–100"],
+                )
+            elif metric_key == "wpm":
+                out["hist"] = _hist_by_predicates(
+                    vals,
+                    [
+                        ("<95", lambda x: x < 95),
+                        ("95–120", lambda x: 95 <= x < 120),
+                        ("120–160", lambda x: 120 <= x <= 160),
+                        (">160", lambda x: x > 160),
+                    ],
+                )
+            elif metric_key == "eye_contact_pct":
+                clamped = [_clamp(v, 0.0, 100.0) for v in vals]
+                out["hist"] = _hist_fixed(
+                    clamped,
+                    [0.0, 30.0, 50.0, 70.0, 100.0],
+                    ["0–29%", "30–49%", "50–69%", "70–100%"],
+                )
+            elif metric_key == "fillers_per_min":
+                out["hist"] = _hist_by_predicates(
+                    vals,
+                    [
+                        ("0–2.0", lambda x: x <= 2.0),
+                        ("2.0–5.0", lambda x: 2.0 < x <= 5.0),
+                        ("5.0–8.0", lambda x: 5.0 < x <= 8.0),
+                        (">8.0", lambda x: x > 8.0),
+                    ],
+                )
+            elif metric_key == "gestures_per_min":
+                out["hist"] = _hist_by_predicates(
+                    vals,
+                    [
+                        ("0–3.9", lambda x: x < 4.0),
+                        ("4.0–10.0", lambda x: 4.0 <= x < 10.0),
+                        ("10.0–20.0", lambda x: 10.0 <= x <= 20.0),
+                        (">20.0", lambda x: x > 20.0),
+                    ],
+                )
+            elif metric_key == "expression_changes_per_min":
+                out["hist"] = _hist_by_predicates(
+                    vals,
+                    [
+                        ("0–19.9", lambda x: x < 20.0),
+                        ("20.0–40.0", lambda x: 20.0 <= x < 40.0),
+                        ("40.0–60.0", lambda x: 40.0 <= x <= 60.0),
+                        (">60.0", lambda x: x > 60.0),
+                    ],
+                )
+            elif metric_key == "tonal":
+                # Tonal score scale differs by pipeline; use quartiles (data-driven) to avoid hallucinated thresholds.
+                p25 = _percentile(vals, 25)
+                p50 = _percentile(vals, 50)
+                p75 = _percentile(vals, 75)
+                if p25 is None or p50 is None or p75 is None:
+                    out["hist"] = {"labels": [], "counts": []}
+                else:
+                    out["hist"] = _hist_by_predicates(
+                        vals,
+                        [
+                            ("≤p25", lambda x, p25=p25: x <= p25),
+                            ("p25–p50", lambda x, p25=p25, p50=p50: p25 < x <= p50),
+                            ("p50–p75", lambda x, p50=p50, p75=p75: p50 < x <= p75),
+                            (">p75", lambda x, p75=p75: x > p75),
+                        ],
+                    )
+
+            return out
 
         total_videos = len(rows)
         completed_rows = [r for r in rows if str(r.get("status") or "") == "completed"]
@@ -1286,20 +1402,27 @@ def create_app() -> FastAPI:
             )
 
         # All-time channel benchmark: robust percentiles + per-metric sample sizes.
+        expected = int(completed_videos)
         bench = {
-            "confidence": _bench([_f(r.get("confidence_score")) for r in completed_rows]),
-            "energy": _bench([_f(r.get("energy_score")) for r in completed_rows]),
-            "wpm": _bench([_f(r.get("wpm")) for r in completed_rows]),
+            "confidence": _bench([_f(r.get("confidence_score")) for r in completed_rows], total_expected=expected, metric_key="confidence"),
+            "energy": _bench([_f(r.get("energy_score")) for r in completed_rows], total_expected=expected, metric_key="energy"),
+            "wpm": _bench([_f(r.get("wpm")) for r in completed_rows], total_expected=expected, metric_key="wpm"),
             "eye_contact_pct": _bench(
                 [
                     (x * 100.0 if x is not None and x <= 1.0 else x)
                     for x in [_f(r.get("eye_contact_ratio")) for r in completed_rows]
-                ]
+                ],
+                total_expected=expected,
+                metric_key="eye_contact_pct",
             ),
-            "fillers_per_min": _bench([_f(r.get("fillers_per_min")) for r in completed_rows]),
-            "gestures_per_min": _bench([_f(r.get("gestures_per_min")) for r in completed_rows]),
-            "tonal": _bench([_f(v.get("metrics", {}).get("tonal_variation")) for v in individual_videos]),
-            "expression_changes_per_min": _bench([_f(v.get("metrics", {}).get("expression_change")) for v in individual_videos]),
+            "fillers_per_min": _bench([_f(r.get("fillers_per_min")) for r in completed_rows], total_expected=expected, metric_key="fillers_per_min"),
+            "gestures_per_min": _bench([_f(r.get("gestures_per_min")) for r in completed_rows], total_expected=expected, metric_key="gestures_per_min"),
+            "tonal": _bench([_f(v.get("metrics", {}).get("tonal_variation")) for v in individual_videos], total_expected=expected, metric_key="tonal"),
+            "expression_changes_per_min": _bench(
+                [_f(v.get("metrics", {}).get("expression_change")) for v in individual_videos],
+                total_expected=expected,
+                metric_key="expression_changes_per_min",
+            ),
         }
 
         return {

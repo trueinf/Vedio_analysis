@@ -241,9 +241,13 @@ export type ChannelReport = {
     string,
     {
       n: number;
+      missing: number;
+      p10: number | null;
       p25: number | null;
       p50: number | null;
       p75: number | null;
+      p90: number | null;
+      hist: { labels: string[]; counts: number[] };
     }
   >;
   top_coach_patterns: { comment: string; count: number }[];

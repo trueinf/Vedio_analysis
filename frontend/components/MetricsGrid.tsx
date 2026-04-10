@@ -83,6 +83,7 @@ export function MetricsGrid(props: {
   demoMetricValue: number;
   selectedMetric: MetricKey | "";
   onSelectMetric: (metric: MetricKey) => void;
+  detailMode?: "video" | "benchmark";
   cards: {
     wpm: number | string;
     fillers: number | string;
@@ -253,6 +254,7 @@ export function MetricsGrid(props: {
         open={detailMetric != null}
         onClose={() => setDetailMetric(null)}
         detail={detailPayload}
+        resultLabel={props.detailMode === "benchmark" ? "Channel benchmark (p50)" : "Your result"}
       />
     </>
   );

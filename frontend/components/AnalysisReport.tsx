@@ -586,6 +586,7 @@ export function AnalysisReport({ analysisId, embedded = false }: AnalysisReportP
               demoMetricValue={Number(metrics.raw.wpm) || 0}
               selectedMetric={selectedMetric}
               onSelectMetric={(m) => setSelectedMetric(m)}
+              detailMode="video"
               cards={metricCardsSnapshot}
               events={timelineEvents}
               durationSec={durationSec}

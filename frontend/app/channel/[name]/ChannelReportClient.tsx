@@ -64,6 +64,32 @@ function fmtBench(
   return `${Math.round(n)}${suffix}`;
 }
 
+function HistBar(props: { labels: string[]; counts: number[] }) {
+  const labels = props.labels || [];
+  const counts = props.counts || [];
+  const max = counts.length ? Math.max(...counts.map((x) => Number(x) || 0)) : 0;
+  if (!labels.length || !counts.length || max <= 0) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      {labels.map((lab, i) => {
+        const c = Number(counts[i] ?? 0) || 0;
+        const w = Math.round((c / max) * 100);
+        return (
+          <div key={`${lab}-${i}`} className="flex items-center gap-2">
+            <div className="w-16 text-[10px] text-slate-500 truncate" title={lab}>
+              {lab}
+            </div>
+            <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div className="h-full bg-white/30" style={{ width: `${Math.max(2, w)}%` }} />
+            </div>
+            <div className="w-7 text-right text-[10px] text-slate-500 tabular-nums">{c}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ChannelReportClient(props: { encodedName: string }) {
   const rawName = useMemo(() => {
     try {
@@ -384,27 +410,111 @@ export default function ChannelReportClient(props: { encodedName: string }) {
                 { key: "tonal", label: "Tonal score", fmt: { format: "float1" as const }, tone: "text-fuchsia-200" },
               ] as const;
               return items.map((it) => {
-                const row = (b as any)[it.key] as { n?: number; p25?: number | null; p50?: number | null; p75?: number | null } | undefined;
+                const row = (b as any)[it.key] as
+                  | {
+                      n?: number;
+                      missing?: number;
+                      p10?: number | null;
+                      p25?: number | null;
+                      p50?: number | null;
+                      p75?: number | null;
+                      p90?: number | null;
+                      hist?: { labels?: string[]; counts?: number[] };
+                    }
+                  | undefined;
                 const n = Number(row?.n ?? 0) || 0;
+                const missing = Number(row?.missing ?? 0) || 0;
+                const p10 = row?.p10 ?? null;
                 const p25 = row?.p25 ?? null;
                 const p50 = row?.p50 ?? null;
                 const p75 = row?.p75 ?? null;
+                const p90 = row?.p90 ?? null;
+                const histLabels = (row?.hist?.labels ?? []) as string[];
+                const histCounts = (row?.hist?.counts ?? []) as number[];
                 return (
                   <div key={it.key} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                     <div className="flex items-baseline justify-between gap-2">
                       <div className="text-sm font-semibold">{it.label}</div>
-                      <div className="text-xs text-slate-500 tabular-nums">n={n}</div>
+                      <div className="text-xs text-slate-500 tabular-nums">
+                        n={n}
+                        {missing ? <span className="text-slate-600"> · missing {missing}</span> : null}
+                      </div>
                     </div>
                     <div className={`mt-2 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
                     <div className="mt-1 text-xs text-slate-400 tabular-nums">
                       {fmtBench(p25, it.fmt)} – {fmtBench(p75, it.fmt)}
                     </div>
+                    <div className="mt-1 text-[10px] text-slate-500 tabular-nums">
+                      p10 {fmtBench(p10, it.fmt)} · p90 {fmtBench(p90, it.fmt)}
+                    </div>
+                    <HistBar labels={histLabels} counts={histCounts} />
                   </div>
                 );
               });
             })()}
           </div>
         )}
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-slate-200">Coverage &amp; reliability</h3>
+        <p className="mt-1 text-xs text-slate-500">
+          Coverage is per metric across all completed videos. Stability is a heuristic: Strong (n≥20), OK (10–19), Early (&lt;10).
+        </p>
+        <div className="mt-3 overflow-x-auto rounded-2xl border border-white/10 bg-white/5">
+          <table className="w-full text-sm min-w-[760px]">
+            <thead className="text-left text-slate-400 border-b border-white/10">
+              <tr>
+                <th className="px-4 py-3">Metric</th>
+                <th className="px-4 py-3">n</th>
+                <th className="px-4 py-3">Missing</th>
+                <th className="px-4 py-3">Coverage</th>
+                <th className="px-4 py-3">Stability</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(() => {
+                const completed = Math.max(0, Number(report?.completed_videos ?? 0) || 0);
+                const b = report?.benchmark ?? {};
+                const rows = [
+                  { key: "confidence", label: "Confidence" },
+                  { key: "energy", label: "Energy" },
+                  { key: "wpm", label: "WPM" },
+                  { key: "eye_contact_pct", label: "Eye contact" },
+                  { key: "fillers_per_min", label: "Fillers / min" },
+                  { key: "gestures_per_min", label: "Gestures / min" },
+                  { key: "expression_changes_per_min", label: "Expressions / min" },
+                  { key: "tonal", label: "Tonal score" },
+                ] as const;
+
+                const stabilityBadge = (n: number) => {
+                  if (n >= 20) return { text: "Strong", cls: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" };
+                  if (n >= 10) return { text: "OK", cls: "border-amber-400/30 bg-amber-400/10 text-amber-200" };
+                  return { text: "Early", cls: "border-white/15 bg-white/5 text-slate-300" };
+                };
+
+                return rows.map((r) => {
+                  const row = (b as any)[r.key] as { n?: number; missing?: number } | undefined;
+                  const n = Math.max(0, Number(row?.n ?? 0) || 0);
+                  const missing = Math.max(0, Number(row?.missing ?? Math.max(0, completed - n)) || 0);
+                  const coverage = completed > 0 ? Math.round((n / completed) * 100) : 0;
+                  const st = stabilityBadge(n);
+                  return (
+                    <tr key={r.key} className="border-b border-white/5">
+                      <td className="px-4 py-3 text-slate-200">{r.label}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-200">{n}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-400">{missing}</td>
+                      <td className="px-4 py-3 tabular-nums text-slate-200">{completed ? `${coverage}%` : "—"}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${st.cls}`}>{st.text}</span>
+                      </td>
+                    </tr>
+                  );
+                });
+              })()}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="mt-10">
@@ -419,6 +529,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             demoMetricValue={Number(aggregatedMetricCards.wpm) || 0}
             selectedMetric={""}
             onSelectMetric={() => {}}
+            detailMode="benchmark"
             cards={aggregatedMetricCards}
             events={[]}
             durationSec={0}

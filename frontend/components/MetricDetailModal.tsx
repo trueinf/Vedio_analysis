@@ -9,8 +9,9 @@ export function MetricDetailModal(props: {
   onClose: () => void;
   detail: MetricDetailPayload | null;
   onApplyToTimeline?: () => void;
+  resultLabel?: string;
 }) {
-  const { open, onClose, detail, onApplyToTimeline } = props;
+  const { open, onClose, detail, onApplyToTimeline, resultLabel } = props;
 
   useEffect(() => {
     if (!open) return;
@@ -58,7 +59,7 @@ export function MetricDetailModal(props: {
 
         <div className="overflow-y-auto p-4 space-y-4 flex-1">
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <div className="text-xs uppercase tracking-wide text-slate-400">Your result</div>
+            <div className="text-xs uppercase tracking-wide text-slate-400">{resultLabel || "Your result"}</div>
             <div className="mt-1 flex flex-wrap items-baseline gap-2">
               <span className="text-2xl font-semibold">{d.valueLine}</span>
               <span className="text-xs px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-200 border border-cyan-400/30">
@@ -120,14 +121,7 @@ export function MetricDetailModal(props: {
             </ul>
           </section>
 
-          <section>
-            <h3 className="text-sm font-semibold text-slate-200">Suggestions</h3>
-            <ul className="mt-1 text-sm text-slate-300 list-disc pl-5 space-y-1">
-              {d.suggestions.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ul>
-          </section>
+          {/* Suggestions section intentionally removed for benchmark-only UX. */}
         </div>
 
         <div className="p-4 border-t border-white/10 flex flex-col sm:flex-row gap-2 shrink-0 bg-slate-900/80">

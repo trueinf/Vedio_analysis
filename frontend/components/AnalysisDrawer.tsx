@@ -176,6 +176,7 @@ export function AnalysisDrawer(props: {
                 demoMetricValue={0}
                 selectedMetric={selectedMetric}
                 onSelectMetric={(m) => setSelectedMetric(m)}
+                detailMode="video"
                 cards={{
                   wpm: cards.wpm,
                   fillers: cards.fillers,
