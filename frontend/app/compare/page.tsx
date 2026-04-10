@@ -369,27 +369,7 @@ function CompareChannelPane() {
             </div>
           ) : null}
 
-          {chartData.length > 0 ? (
-            <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
-              <div className="text-sm font-semibold">Confidence over time</div>
-              <div className="mt-4 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                    <Tooltip
-                      contentStyle={{ background: "rgba(2,6,23,0.92)", border: "1px solid rgba(255,255,255,0.1)" }}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="confA" name={nameA} stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
-                    <Line type="monotone" dataKey="confB" name={nameB} stroke="#f472b6" strokeWidth={2} dot={false} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          ) : (
-            <div className="text-slate-500 text-sm">No confidence scores yet to plot trends.</div>
-          )}
+          {/* Trend charts hidden */}
         </>
       ) : null}
     </div>
@@ -1448,9 +1428,7 @@ function CompareChannelVsVideoPane() {
                     </div>
                   ) : null}
                   {verdict.trendNote ? (
-                    <div className="inline-flex rounded-full border border-indigo-400/30 bg-indigo-400/10 px-3 py-1 text-xs text-indigo-200">
-                      {verdict.trendNote}
-                    </div>
+                    null
                   ) : null}
                 </div>
               </div>
@@ -1711,7 +1689,7 @@ function CompareChannelVsVideoPane() {
           <Card className={`p-5 rounded-2xl ${premiumSurfaceClass}`}>
             <div className="text-sm font-semibold">Prioritised action plan</div>
             <div className="mt-1 text-xs text-slate-500">
-              Sorted by impact priority (metric gaps, edges, coach overlap, and recent channel trend).
+              Sorted by impact priority (metric gaps, edges, and coach overlap).
             </div>
             <ol className="mt-4 space-y-3 list-decimal list-inside text-sm text-slate-200">
               {cvvActions.length ? (
@@ -2237,7 +2215,7 @@ export default function ComparePage() {
                 }
               }}
             >
-              {busyCompare ? "Comparing…" : "Generate AI Coach Summary"}
+              {busyCompare ? "Comparing…" : "Compare"}
             </Button>
           </div>
 
@@ -2302,12 +2280,6 @@ export default function ComparePage() {
             </Card>
           </div>
 
-          <Card className={`p-4 rounded-2xl ${premiumSurfaceClass}`}>
-            <div className="text-sm font-semibold">AI Coach Summary</div>
-            <div className="mt-2 text-sm text-slate-100 whitespace-pre-wrap">
-              {compareReport ? coachTextFromReport(compareReport) : "Click “Generate AI Coach Summary” to produce recommendations."}
-            </div>
-          </Card>
         </div>
       ) : sourceId && newJobId && !(sourceResult && newResult) ? (
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/5 px-6 py-8 text-center text-slate-400 text-sm">

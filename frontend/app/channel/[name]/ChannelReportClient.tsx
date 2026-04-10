@@ -2,17 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { MetricsGrid } from "@/components/MetricsGrid";
-import type { MetricEvent, MetricKey } from "@/components/video-analysis-types";
 import type { ChannelReport, ChannelSummary } from "@/lib/api";
 import {
-  clearChannelAISummaryCache,
-  fetchChannelAISummary,
   fetchChannelReport,
   fetchChannelsSummary,
-  getAnalysisDetail,
   updateChannelName,
 } from "@/lib/api";
 
@@ -56,92 +51,17 @@ function titleCase(s: string): string {
     .trim();
 }
 
-const chartTooltip = {
-  contentStyle: { background: "rgba(2,6,23,0.92)", border: "1px solid rgba(255,255,255,0.1)" },
-  labelStyle: { color: "#94a3b8" },
-};
-
-function eventToMetricEvent(e: any): MetricEvent {
-  if (!e) return { t0: 0, metric: "", label: "" };
-  return {
-    metric: e.metric ?? e.type,
-    type: e.type,
-    label: e.label ?? e.message ?? e.note ?? e.reason ?? "",
-    t0: Number(e.t0 ?? 0),
-    t1: e.t1 == null ? undefined : Number(e.t1),
-    value: e.value == null ? undefined : Number(e.value),
-    note: e.note,
-    message: e.message,
-  };
-}
-
-function mean(nums: number[]): number | null {
-  const ok = (nums || []).filter((n) => Number.isFinite(n));
-  if (!ok.length) return null;
-  return ok.reduce((a, b) => a + b, 0) / ok.length;
-}
-
-function TrendMetricLine(props: {
-  label: string;
-  delta: number | null;
-  unit: "pts" | "wpm";
-}) {
-  const { label, delta, unit } = props;
-  if (delta == null) {
-    return (
-      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
-        <span className="w-24 shrink-0 text-slate-300">{label}</span>
-        <span>→ stable</span>
-        <span className="text-slate-500">(last 5 vs prev 5 videos)</span>
-      </div>
-    );
-  }
-  const rounded = Math.round(delta);
-  if (rounded === 0) {
-    return (
-      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
-        <span className="w-24 shrink-0 text-slate-300">{label}</span>
-        <span>→ stable</span>
-        <span className="text-slate-500">(last 5 vs prev 5 videos)</span>
-      </div>
-    );
-  }
-  const up = rounded > 0;
-  const down = rounded < 0;
-  const arrow = up ? "↑" : "↓";
-  const color = up ? "text-emerald-300" : down ? "text-red-300" : "text-slate-400";
-  const sign = rounded > 0 ? "+" : "";
-  const suffix = unit === "pts" ? " pts" : " WPM";
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="w-24 shrink-0 text-slate-300">{label}</span>
-      <span className={color}>
-        {arrow} {sign}
-        {rounded}
-        {suffix}
-      </span>
-      <span className="text-slate-500">(last 5 vs prev 5 videos)</span>
-    </div>
-  );
-}
-
-function RefreshIcon(props: { className?: string }) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      className={props.className}
-      aria-hidden
-    >
-      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-      <path d="M3 3v5h5" />
-      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-      <path d="M16 21h5v-5" />
-    </svg>
-  );
+function fmtBench(
+  v: number | null | undefined,
+  opts?: { format?: "int" | "float1" | "pct0"; suffix?: string }
+): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  const n = Number(v);
+  const fmt = opts?.format ?? "int";
+  const suffix = opts?.suffix ?? "";
+  if (fmt === "pct0") return `${Math.round(n)}%`;
+  if (fmt === "float1") return `${n.toFixed(1)}${suffix}`;
+  return `${Math.round(n)}${suffix}`;
 }
 
 export default function ChannelReportClient(props: { encodedName: string }) {
@@ -162,19 +82,6 @@ export default function ChannelReportClient(props: { encodedName: string }) {
   const [nameEditErr, setNameEditErr] = useState("");
   const [renaming, setRenaming] = useState(false);
   const nameErrTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [aiSummary, setAiSummary] = useState("");
-  const [aiSummaryLoading, setAiSummaryLoading] = useState(true);
-  const [aiSummaryError, setAiSummaryError] = useState("");
-
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-
-  const [selectedMetric, setSelectedMetric] = useState<MetricKey | "">("");
-  const [latestResult, setLatestResult] = useState<any>(null);
-  const [latestDurationSec, setLatestDurationSec] = useState<number>(0);
-  const [latestEvents, setLatestEvents] = useState<MetricEvent[]>([]);
-  const [eyeNotMeasurable, setEyeNotMeasurable] = useState(false);
 
   function showNameErr(msg: string) {
     if (nameErrTimerRef.current) clearTimeout(nameErrTimerRef.current);
@@ -229,18 +136,11 @@ export default function ChannelReportClient(props: { encodedName: string }) {
     (async () => {
       setLoading(true);
       setErr("");
-      setAiSummaryLoading(true);
-      setAiSummaryError("");
       try {
-        const settled = await Promise.allSettled([
-          fetchChannelsSummary(),
-          fetchChannelReport(rawName.trim()),
-          fetchChannelAISummary(rawName.trim()),
-        ]);
+        const settled = await Promise.allSettled([fetchChannelsSummary(), fetchChannelReport(rawName.trim())]);
         if (!alive) return;
         const s0 = settled[0];
         const s1 = settled[1];
-        const s2 = settled[2];
 
         if (s0.status === "fulfilled" && s1.status === "fulfilled") {
           const sumJson = s0.value;
@@ -262,26 +162,14 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           setReport(null);
           setSummaryMatch(null);
         }
-
-        if (s2.status === "fulfilled") {
-          setAiSummary(s2.value.summary);
-          setAiSummaryError("");
-        } else {
-          setAiSummary("");
-          setAiSummaryError(
-            s2.reason instanceof Error ? s2.reason.message : "Could not generate summary"
-          );
-        }
       } catch (e: unknown) {
         if (!alive) return;
         setErr(e instanceof Error ? e.message : "Failed to load channel");
         setReport(null);
         setSummaryMatch(null);
-        setAiSummaryError("Could not generate summary");
       } finally {
         if (alive) {
           setLoading(false);
-          setAiSummaryLoading(false);
         }
       }
     })();
@@ -289,56 +177,6 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       alive = false;
     };
   }, [rawName]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const latestId = (report?.individual_videos || [])[0]?.analysis_id;
-      if (!latestId) {
-        setLatestResult(null);
-        setLatestDurationSec(0);
-        setLatestEvents([]);
-        setEyeNotMeasurable(false);
-        return;
-      }
-      try {
-        const d = await getAnalysisDetail(String(latestId));
-        if (!alive) return;
-        const rj: any = (d as any)?.result_json ?? null;
-        setLatestResult(rj);
-        const dur = Number(rj?.summary?.duration_sec ?? (d as any)?.job?.duration_sec ?? 0);
-        setLatestDurationSec(Number.isFinite(dur) ? dur : 0);
-        const ev = (rj?.events || []) as any[];
-        const drops = (rj?.engagement_drops || []) as any[];
-        const pauses = (rj?.pauses || []) as any[];
-        const best = (rj?.best_moments || []) as any[];
-        const worst = (rj?.worst_moments || []) as any[];
-        const mapped: MetricEvent[] = [];
-        for (const e of ev) mapped.push(eventToMetricEvent(e));
-        for (const e of drops)
-          mapped.push({ ...eventToMetricEvent(e), metric: e.metric ?? e.type ?? "engagement_drop", type: e.type ?? e.metric ?? "engagement_drop" });
-        for (const e of pauses)
-          mapped.push({ ...eventToMetricEvent(e), metric: "pause", type: "pause", label: e.reason ?? e.label ?? e.note ?? "Pause" });
-        for (const e of best)
-          mapped.push({ ...eventToMetricEvent(e), metric: "best_moment", type: "best_moment", label: e.note ?? e.label ?? "Best moment" });
-        for (const e of worst)
-          mapped.push({ ...eventToMetricEvent(e), metric: "worst_moment", type: "worst_moment", label: e.reason ?? e.label ?? "Worst moment" });
-        setLatestEvents(mapped.sort((a, b) => Number(a.t0 || 0) - Number(b.t0 || 0)));
-
-        const faceVisible = Number(rj?.cards?.eye_contact?.face_visible_ratio ?? NaN);
-        setEyeNotMeasurable(Number.isFinite(faceVisible) ? faceVisible < 0.1 : false);
-      } catch {
-        if (!alive) return;
-        setLatestResult(null);
-        setLatestDurationSec(0);
-        setLatestEvents([]);
-        setEyeNotMeasurable(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [report]);
 
   useEffect(() => {
     return () => {
@@ -351,13 +189,18 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
   const totals = useMemo(() => {
     const r = report;
+    const b = r?.benchmark ?? null;
+    const bConf = b && b["confidence"] ? Number(b["confidence"].p50 ?? NaN) : NaN;
+    const bEnergy = b && b["energy"] ? Number(b["energy"].p50 ?? NaN) : NaN;
+    const bWpm = b && b["wpm"] ? Number(b["wpm"].p50 ?? NaN) : NaN;
+    const bEye = b && b["eye_contact_pct"] ? Number(b["eye_contact_pct"].p50 ?? NaN) : NaN;
     return {
       totalVideos: Math.round(Number(r?.total_videos ?? 0) || 0),
       completedVideos: Math.round(Number(r?.completed_videos ?? 0) || 0),
-      avgConf: Math.round(Number(r?.avg_confidence ?? 0) || 0),
-      avgEnergy: Math.round(Number(r?.avg_energy ?? 0) || 0),
-      avgWpm: Math.round(Number(r?.avg_wpm ?? 0) || 0),
-      avgEye: Math.round(Number(r?.avg_eye_contact ?? 0) || 0),
+      benchConf: Number.isFinite(bConf) ? Math.round(bConf) : Math.round(Number(r?.avg_confidence ?? 0) || 0),
+      benchEnergy: Number.isFinite(bEnergy) ? Math.round(bEnergy) : Math.round(Number(r?.avg_energy ?? 0) || 0),
+      benchWpm: Number.isFinite(bWpm) ? Math.round(bWpm) : Math.round(Number(r?.avg_wpm ?? 0) || 0),
+      benchEye: Number.isFinite(bEye) ? Math.round(bEye) : Math.round(Number(r?.avg_eye_contact ?? 0) || 0),
     };
   }, [report]);
 
@@ -377,43 +220,6 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       ? earliest.toLocaleDateString("en-US", { month: "long", year: "numeric" })
       : "—";
 
-  const confTrend = useMemo(() => {
-    return (report?.confidence_over_time || [])
-      .map((p) => {
-        const t = new Date(p.date).getTime();
-        return { x: p.date, t, v: p.value == null ? null : Number(p.value) };
-      })
-      .filter((p) => Number.isFinite(p.t));
-  }, [report]);
-
-  const seriesByDay = useMemo(() => {
-    const vids = report?.individual_videos || [];
-    const byDay: Record<string, { conf: number[]; energy: number[]; wpm: number[] }> = {};
-    for (const v of vids) {
-      const day = String(v.created_at || "").slice(0, 10);
-      if (!day) continue;
-      if (!byDay[day]) byDay[day] = { conf: [], energy: [], wpm: [] };
-      if (v.confidence_score != null) byDay[day].conf.push(Number(v.confidence_score));
-      if (v.energy_score != null) byDay[day].energy.push(Number(v.energy_score));
-      const w = v.metrics?.speech_rate_wpm;
-      if (w != null) byDay[day].wpm.push(Number(w));
-    }
-    const days = Object.keys(byDay).sort();
-    const mean = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
-    return days.map((d) => ({
-      x: d,
-      confidence: mean(byDay[d].conf),
-      energy: mean(byDay[d].energy),
-      wpm: mean(byDay[d].wpm),
-    }));
-  }, [report]);
-
-  const trendPoints = seriesByDay;
-
-  const avgConfLine = totals.avgConf;
-  const avgEnergyLine = totals.avgEnergy;
-  const avgWpmLine = totals.avgWpm;
-
   const best = report?.best_videos || [];
   const worst = report?.worst_videos || [];
   const coachPatterns = report?.top_coach_patterns || [];
@@ -421,71 +227,32 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
   const thumbUrl = summaryMatch?.thumbnailUrl?.trim() || null;
 
-  const confDelta = useMemo(() => {
-    const r = report;
-    if (r?.recent_avg_confidence == null || r?.previous_avg_confidence == null) return null;
-    return Number(r.recent_avg_confidence) - Number(r.previous_avg_confidence);
-  }, [report]);
-
   const aggregatedMetricCards = useMemo(() => {
     const vids = report?.individual_videos || [];
-    const wpm = totals.avgWpm;
-    const eyeRatio = totals.avgEye > 0 ? totals.avgEye / 100 : 0;
+    const b = report?.benchmark ?? null;
+    const wpm = b && b["wpm"] ? (b["wpm"].p50 ?? null) : null;
+    const eyePct = b && b["eye_contact_pct"] ? (b["eye_contact_pct"].p50 ?? null) : null;
+    const fillers = b && b["fillers_per_min"] ? (b["fillers_per_min"].p50 ?? null) : null;
+    const gestures = b && b["gestures_per_min"] ? (b["gestures_per_min"].p50 ?? null) : null;
+    const tonalScore = b && b["tonal"] ? (b["tonal"].p50 ?? null) : null;
+    const expr = b && b["expression_changes_per_min"] ? (b["expression_changes_per_min"].p50 ?? null) : null;
 
-    const fillers = mean(
-      vids
-        .map((v) => Number(v.metrics?.filler_rate))
-        .filter((n) => Number.isFinite(n))
-    );
-    const gestures = mean(
-      vids
-        .map((v) => Number(v.metrics?.gesture_rate))
-        .filter((n) => Number.isFinite(n))
-    );
-    const tonalScore = mean(
-      vids
-        .map((v) => Number(v.metrics?.tonal_variation))
-        .filter((n) => Number.isFinite(n))
-    );
-    const expr = mean(
-      vids
-        .map((v) => Number(v.metrics?.expression_change))
-        .filter((n) => Number.isFinite(n))
-    );
-
-    const tonalLabel = String(latestResult?.cards?.tonal_variation?.label ?? "").toLowerCase() || null;
-    const exprByType = (latestResult?.cards?.expressions?.by_type ?? {}) as Record<string, number>;
-    const exprTop = Object.entries(exprByType).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0] ?? "-";
-    const exprChangesPerMin = Number.isFinite(expr ?? NaN) ? Number(expr) : 0;
+    const eyeRatio = eyePct == null ? "-" : Number.isFinite(Number(eyePct)) ? Number(eyePct) / 100 : "-";
+    const exprChangesPerMin = expr == null || !Number.isFinite(Number(expr)) ? 0 : Number(expr);
     const exprBadge = exprChangesPerMin < 20 ? "low" : exprChangesPerMin <= 60 ? "normal" : "high";
 
     return {
-      wpm,
-      fillers: fillers == null ? "-" : Number(fillers.toFixed(1)),
-      eye: Number.isFinite(eyeRatio) ? eyeRatio : "-",
-      gestures: gestures == null ? "-" : Number(gestures.toFixed(1)),
-      tonalScore: tonalScore == null ? null : Number(tonalScore.toFixed(1)),
-      tonalLabel,
-      exprTop,
+      wpm: wpm == null ? "-" : Number.isFinite(Number(wpm)) ? Number(wpm) : "-",
+      fillers: fillers == null ? "-" : Number.isFinite(Number(fillers)) ? Number(Number(fillers).toFixed(1)) : "-",
+      eye: eyeRatio,
+      gestures: gestures == null ? "-" : Number.isFinite(Number(gestures)) ? Number(Number(gestures).toFixed(1)) : "-",
+      tonalScore: tonalScore == null ? null : Number.isFinite(Number(tonalScore)) ? Number(Number(tonalScore).toFixed(1)) : null,
+      tonalLabel: null,
+      exprTop: "-",
       exprChangesPerMin,
       exprBadge,
     };
-  }, [report, totals.avgWpm, totals.avgEye, latestResult]);
-
-  async function regenerateAiSummary() {
-    clearChannelAISummaryCache(rawName.trim());
-    setAiSummaryLoading(true);
-    setAiSummaryError("");
-    try {
-      const r = await fetchChannelAISummary(rawName.trim(), { force: true });
-      setAiSummary(r.summary);
-    } catch (e: unknown) {
-      setAiSummary("");
-      setAiSummaryError(e instanceof Error ? e.message : "Could not generate summary");
-    } finally {
-      setAiSummaryLoading(false);
-    }
-  }
+  }, [report]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
@@ -574,10 +341,10 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
-              { label: "Avg Confidence", value: loading ? "—" : String(totals.avgConf) },
-              { label: "Avg Energy", value: loading ? "—" : String(totals.avgEnergy) },
-              { label: "Avg WPM", value: loading ? "—" : String(totals.avgWpm) },
-              { label: "Eye Contact", value: loading ? "—" : `${totals.avgEye}%` },
+              { label: "Benchmark Confidence (p50)", value: loading ? "—" : String(totals.benchConf) },
+              { label: "Benchmark Energy (p50)", value: loading ? "—" : String(totals.benchEnergy) },
+              { label: "Benchmark WPM (p50)", value: loading ? "—" : String(totals.benchWpm) },
+              { label: "Benchmark Eye (p50)", value: loading ? "—" : `${totals.benchEye}%` },
             ].map((p) => (
               <div
                 key={p.label}
@@ -588,124 +355,54 @@ export default function ChannelReportClient(props: { encodedName: string }) {
               </div>
             ))}
           </div>
-
-          {report?.recent_avg_confidence == null || report?.previous_avg_confidence == null ? (
-            <p className="mt-4 text-sm text-slate-500">Need 6+ videos for trend data.</p>
-          ) : (
-            <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 space-y-2">
-              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Trend</div>
-              <TrendMetricLine label="Confidence" delta={confDelta} unit="pts" />
-            </div>
-          )}
-
-          <div className="mt-6">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                <span>AI Summary</span>
-                <span className="text-cyan-300/90" aria-hidden>
-                  ✦
-                </span>
-              </div>
-              <button
-                type="button"
-                title="Regenerate summary"
-                className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-slate-400 hover:text-cyan-200 hover:bg-white/10 disabled:opacity-40"
-                disabled={aiSummaryLoading}
-                onClick={() => void regenerateAiSummary()}
-              >
-                <RefreshIcon className="w-3.5 h-3.5" />
-                Regenerate
-              </button>
-            </div>
-            {aiSummaryLoading ? (
-              <div className="mt-3 space-y-2 rounded-xl border border-white/10 bg-white/[0.04] p-4">
-                <div className="h-3 w-full max-w-[95%] rounded bg-white/10 animate-pulse" />
-                <div className="h-3 w-full max-w-[88%] rounded bg-white/10 animate-pulse" />
-                <div className="h-3 w-full max-w-[72%] rounded bg-white/10 animate-pulse" />
-              </div>
-            ) : aiSummaryError ? (
-              <div className="mt-3 rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-sm text-red-200/90 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <span>Could not generate summary</span>
-                <button
-                  type="button"
-                  className="text-cyan-300 hover:underline text-sm"
-                  onClick={() => void regenerateAiSummary()}
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
-              <div
-                className="mt-3 rounded-xl border border-white/10 bg-white/[0.06] pl-4 pr-4 py-3 text-sm text-slate-200 leading-relaxed"
-                style={{ borderLeftWidth: 4, borderLeftColor: `hsl(${hue} 45% 42%)` }}
-              >
-                {aiSummary || "—"}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
       <div className="mt-10">
-        <h2 className="text-lg font-semibold">Performance over time</h2>
+        <h2 className="text-lg font-semibold">All-time benchmark</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Median (p50) with typical range (p25–p75). Sample size (n) is per-metric across all completed videos.
+        </p>
         {loading ? (
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="h-56 bg-white/5 border border-white/10 rounded-2xl animate-pulse" />
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="h-20 bg-white/5 border border-white/10 rounded-2xl animate-pulse" />
             ))}
           </div>
-        ) : trendPoints.length === 0 ? (
-          <div className="mt-4 text-sm text-slate-400">No completed videos with scores yet.</div>
         ) : (
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-              <div className="text-xs text-slate-400 mb-2">Confidence</div>
-              <div style={{ width: "100%", minHeight: 200 }}>
-                {mounted ? (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={trendPoints}>
-                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <Tooltip {...chartTooltip} />
-                      <ReferenceLine y={avgConfLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                      <Line type="monotone" dataKey="confidence" stroke="#22d3ee" strokeWidth={2} dot={false} connectNulls />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : null}
-              </div>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-              <div className="text-xs text-slate-400 mb-2">Energy</div>
-              <div style={{ width: "100%", minHeight: 200 }}>
-                {mounted ? (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={trendPoints}>
-                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <YAxis domain={[0, 100]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <Tooltip {...chartTooltip} />
-                      <ReferenceLine y={avgEnergyLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                      <Line type="monotone" dataKey="energy" stroke="#34d399" strokeWidth={2} dot={false} connectNulls />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : null}
-              </div>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-              <div className="text-xs text-slate-400 mb-2">WPM</div>
-              <div style={{ width: "100%", minHeight: 200 }}>
-                {mounted ? (
-                  <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={trendPoints}>
-                      <XAxis dataKey="x" stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <YAxis domain={[0, 200]} stroke="rgba(148,163,184,0.6)" tick={{ fontSize: 10 }} />
-                      <Tooltip {...chartTooltip} />
-                      <ReferenceLine y={avgWpmLine} stroke="rgba(148,163,184,0.5)" strokeDasharray="4 4" />
-                      <Line type="monotone" dataKey="wpm" stroke="#fbbf24" strokeWidth={2} dot={false} connectNulls />
-                    </LineChart>
-                  </ResponsiveContainer>
-                ) : null}
-              </div>
-            </div>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {(() => {
+              const b = report?.benchmark ?? {};
+              const items = [
+                { key: "confidence", label: "Confidence", fmt: { format: "int" as const }, tone: "text-cyan-200" },
+                { key: "energy", label: "Energy", fmt: { format: "int" as const }, tone: "text-emerald-200" },
+                { key: "wpm", label: "WPM", fmt: { format: "int" as const, suffix: " WPM" }, tone: "text-amber-200" },
+                { key: "eye_contact_pct", label: "Eye contact", fmt: { format: "pct0" as const }, tone: "text-indigo-200" },
+                { key: "fillers_per_min", label: "Fillers", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-rose-200" },
+                { key: "gestures_per_min", label: "Gestures", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-teal-200" },
+                { key: "expression_changes_per_min", label: "Expressions", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-sky-200" },
+                { key: "tonal", label: "Tonal score", fmt: { format: "float1" as const }, tone: "text-fuchsia-200" },
+              ] as const;
+              return items.map((it) => {
+                const row = (b as any)[it.key] as { n?: number; p25?: number | null; p50?: number | null; p75?: number | null } | undefined;
+                const n = Number(row?.n ?? 0) || 0;
+                const p25 = row?.p25 ?? null;
+                const p50 = row?.p50 ?? null;
+                const p75 = row?.p75 ?? null;
+                return (
+                  <div key={it.key} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <div className="text-sm font-semibold">{it.label}</div>
+                      <div className="text-xs text-slate-500 tabular-nums">n={n}</div>
+                    </div>
+                    <div className={`mt-2 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
+                    <div className="mt-1 text-xs text-slate-400 tabular-nums">
+                      {fmtBench(p25, it.fmt)} – {fmtBench(p75, it.fmt)}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </div>
@@ -713,33 +410,20 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       <div className="mt-10">
         <h2 className="text-lg font-semibold">Detailed metrics</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Click any metric for the full breakdown (modal uses your most recent completed video).
+          Click any metric for a benchmark breakdown (based on all completed videos).
         </p>
         <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
           <MetricsGrid
             show
             currentStepId="channel"
             demoMetricValue={Number(aggregatedMetricCards.wpm) || 0}
-            selectedMetric={selectedMetric}
-            onSelectMetric={(m) => setSelectedMetric(m)}
+            selectedMetric={""}
+            onSelectMetric={() => {}}
             cards={aggregatedMetricCards}
-            events={latestEvents}
-            durationSec={latestDurationSec || 0}
-            eyeNotMeasurable={eyeNotMeasurable}
-            metricDetailContext={
-              latestResult
-                ? {
-                    durationSec: latestDurationSec || 0,
-                    binSizeSec: 10,
-                    timelineBins: (latestResult?.timeline_bins ?? latestResult?.timelineBins ?? []) as any[],
-                    rawCards: (latestResult?.cards ?? null) as any,
-                    transcriptPreview: String(latestResult?.transcript_preview ?? latestResult?.transcriptPreview ?? "") || null,
-                    summary: (latestResult?.summary ?? null) as any,
-                    quality: (latestResult?.quality ?? null) as any,
-                    speakers: (latestResult?.speakers ?? null) as any,
-                  }
-                : null
-            }
+            events={[]}
+            durationSec={0}
+            eyeNotMeasurable={false}
+            metricDetailContext={null}
           />
         </div>
       </div>

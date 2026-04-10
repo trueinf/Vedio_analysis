@@ -415,31 +415,6 @@ export default function DashboardClient() {
                         <div className="mt-1 text-xs text-slate-400">
                           {ch.totalVideos} video{ch.totalVideos === 1 ? "" : "s"} · Last: {formatRelative(last)}
                         </div>
-                        {(() => {
-                          const r = ch.recentAvgConfidence;
-                          const p = ch.previousAvgConfidence;
-                          if (r == null || p == null) return null;
-                          const d = r - p;
-                          if (d > 5) {
-                            return (
-                              <div className="mt-1.5">
-                                <span className="inline-block text-[11px] px-2 py-1 rounded-lg border text-emerald-200 bg-emerald-400/10 border-emerald-400/25">
-                                  ↑ Improving
-                                </span>
-                              </div>
-                            );
-                          }
-                          if (d < -5) {
-                            return (
-                              <div className="mt-1.5">
-                                <span className="inline-block text-[11px] px-2 py-1 rounded-lg border text-amber-200 bg-amber-400/12 border-amber-400/28">
-                                  ↓ Declining
-                                </span>
-                              </div>
-                            );
-                          }
-                          return null;
-                        })()}
                       </div>
                     </div>
 

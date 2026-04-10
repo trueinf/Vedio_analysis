@@ -9,7 +9,6 @@ import { getApiBaseUrl } from "@/lib/api";
 // Dynamically import heavy UI blocks.
 const MetricsGrid = dynamic(() => import("./MetricsGrid").then((m) => m.MetricsGrid));
 const MultiMetricTimeline = dynamic(() => import("./MultiMetricTimeline").then((m) => m.MultiMetricTimeline));
-const CoachSummary = dynamic(() => import("./CoachSummary").then((m) => m.CoachSummary));
 const ScoreBreakdown = dynamic(() => import("./ScoreBreakdown").then((m) => m.ScoreBreakdown));
 const PriorityList = dynamic(() => import("./PriorityList").then((m) => m.PriorityList));
 const MetricStoryCard = dynamic(() => import("./MetricStoryCard").then((m) => m.MetricStoryCard));
@@ -203,8 +202,6 @@ export function AnalysisDrawer(props: {
                 onSeek={(t0, t1) => onSeek(t0, t1)}
                 onActiveEventChange={setActiveEvent}
               />
-
-              <CoachSummary summary={cards.coachSummary} />
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <ScoreBreakdown score={Number(cards.score || 0)} parts={cards.scoreBreakdown} />

@@ -1064,6 +1064,16 @@ def create_app() -> FastAPI:
                 "best_videos": [],
                 "worst_videos": [],
                 "confidence_over_time": [],
+                "benchmark": {
+                    "confidence": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "energy": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "wpm": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "eye_contact_pct": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "fillers_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "gestures_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "tonal": {"n": 0, "p25": None, "p50": None, "p75": None},
+                    "expression_changes_per_min": {"n": 0, "p25": None, "p50": None, "p75": None},
+                },
                 "individual_videos": [],
             }
 
@@ -1078,6 +1088,35 @@ def create_app() -> FastAPI:
 
         def _round1(v: float | None) -> float | None:
             return round(float(v), 1) if v is not None else None
+
+        def _percentile(sorted_vals: list[float], p: float) -> float | None:
+            """
+            Linear interpolation percentile on a pre-sorted list.
+            p is 0..100.
+            """
+            if not sorted_vals:
+                return None
+            if p <= 0:
+                return float(sorted_vals[0])
+            if p >= 100:
+                return float(sorted_vals[-1])
+            k = (len(sorted_vals) - 1) * (p / 100.0)
+            f = int(k)
+            c = min(f + 1, len(sorted_vals) - 1)
+            if f == c:
+                return float(sorted_vals[f])
+            d0 = sorted_vals[f] * (c - k)
+            d1 = sorted_vals[c] * (k - f)
+            return float(d0 + d1)
+
+        def _bench(values: list[float | None]) -> dict:
+            vals = sorted([float(v) for v in values if v is not None])
+            return {
+                "n": int(len(vals)),
+                "p25": _round1(_percentile(vals, 25)),
+                "p50": _round1(_percentile(vals, 50)),
+                "p75": _round1(_percentile(vals, 75)),
+            }
 
         total_videos = len(rows)
         completed_rows = [r for r in rows if str(r.get("status") or "") == "completed"]
@@ -1246,6 +1285,23 @@ def create_app() -> FastAPI:
                 }
             )
 
+        # All-time channel benchmark: robust percentiles + per-metric sample sizes.
+        bench = {
+            "confidence": _bench([_f(r.get("confidence_score")) for r in completed_rows]),
+            "energy": _bench([_f(r.get("energy_score")) for r in completed_rows]),
+            "wpm": _bench([_f(r.get("wpm")) for r in completed_rows]),
+            "eye_contact_pct": _bench(
+                [
+                    (x * 100.0 if x is not None and x <= 1.0 else x)
+                    for x in [_f(r.get("eye_contact_ratio")) for r in completed_rows]
+                ]
+            ),
+            "fillers_per_min": _bench([_f(r.get("fillers_per_min")) for r in completed_rows]),
+            "gestures_per_min": _bench([_f(r.get("gestures_per_min")) for r in completed_rows]),
+            "tonal": _bench([_f(v.get("metrics", {}).get("tonal_variation")) for v in individual_videos]),
+            "expression_changes_per_min": _bench([_f(v.get("metrics", {}).get("expression_change")) for v in individual_videos]),
+        }
+
         return {
             "channel_name": name,
             "total_videos": int(total_videos),
@@ -1261,6 +1317,7 @@ def create_app() -> FastAPI:
             "best_videos": best_videos,
             "worst_videos": worst_videos,
             "confidence_over_time": confidence_over_time,
+            "benchmark": bench,
             "individual_videos": individual_videos,
         }
 

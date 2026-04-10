@@ -212,40 +212,6 @@ export async function fetchChannelsSummary(): Promise<{ channels: ChannelSummary
   return await res.json();
 }
 
-/** Session cache for AI channel summary (same-tab SPA navigation). */
-const channelAiSummaryCache = new Map<string, string>();
-
-/** POST /api/channels/{name}/summary — OpenAI-written paragraph (server-side key only). */
-export async function fetchChannelAISummary(
-  channelName: string,
-  opts?: { force?: boolean }
-): Promise<{ summary: string }> {
-  const k = channelName.trim().toLowerCase();
-  if (!opts?.force) {
-    const hit = channelAiSummaryCache.get(k);
-    if (hit != null) return { summary: hit };
-  }
-  const enc = encodeURIComponent(channelName.trim());
-  const res = await fetch(`${API_BASE}/api/channels/${enc}/summary`, { method: "POST" });
-  if (!res.ok) {
-    let detail = "";
-    try {
-      const data = (await res.json()) as { detail?: string };
-      if (typeof data.detail === "string") detail = data.detail;
-    } catch {
-      // ignore
-    }
-    throw new Error(detail || `Channel AI summary failed (${res.status})`);
-  }
-  const data = (await res.json()) as { summary: string };
-  if (data.summary) channelAiSummaryCache.set(k, data.summary);
-  return data;
-}
-
-export function clearChannelAISummaryCache(channelName: string): void {
-  channelAiSummaryCache.delete(channelName.trim().toLowerCase());
-}
-
 /** GET /api/channels/{name}/analyses — all rows for channel, oldest first. */
 export async function listAnalysesForChannel(
   channelName: string,
@@ -271,6 +237,15 @@ export type ChannelReport = {
   confidence_trend: "improving" | "declining" | "stable" | null;
   recent_avg_confidence: number | null;
   previous_avg_confidence: number | null;
+  benchmark?: Record<
+    string,
+    {
+      n: number;
+      p25: number | null;
+      p50: number | null;
+      p75: number | null;
+    }
+  >;
   top_coach_patterns: { comment: string; count: number }[];
   best_videos: { filename: string; confidence: number | null; analysis_id: string }[];
   worst_videos: { filename: string; confidence: number | null; analysis_id: string }[];
