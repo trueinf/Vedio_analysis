@@ -559,6 +559,14 @@ export async function deleteChannel(channelId: string): Promise<{ success: boole
   return await res.json();
 }
 
+export async function deleteChannelByName(channelName: string): Promise<{ success: boolean; channel_name: string; deleted: number }> {
+  const name = (channelName || "").trim();
+  if (!name) throw new Error("Channel name is required");
+  const res = await fetch(`${API_BASE}/api/channels/by-name/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Delete channel failed (${res.status})`);
+  return await res.json();
+}
+
 export async function getJob(jobId: string): Promise<Job> {
   const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Job fetch failed (${res.status})`);

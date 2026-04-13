@@ -277,6 +277,28 @@ def rename_channel_name_in_analyses(*, old_name: str, new_name: str) -> int:
 
 
 @supabase_retry()
+def delete_analyses_by_channel_name(*, channel_name: str) -> int:
+    """
+    Permanently delete Supabase analyses rows for a channel_name (case-insensitive).
+    Returns number of rows returned by the API client (may be 0 if not supported).
+    """
+    if not _configured():
+        return 0
+    name = (channel_name or "").strip()
+    if not name:
+        return 0
+    sb = _client()
+    try:
+        res = sb.table("analyses").delete().ilike("channel_name", name).execute()
+        data = getattr(res, "data", None)
+        if isinstance(data, list):
+            return len(data)
+    except Exception as e:
+        print(f"[Supabase] delete_analyses_by_channel_name FAILED: {e}")
+    return 0
+
+
+@supabase_retry()
 def put_result_json(
     *,
     analysis_id: str,

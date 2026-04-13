@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { deleteChannel, fetchChannelsSummary, updateChannelName } from "@/lib/api";
+import { deleteChannel, deleteChannelByName, fetchChannelsSummary, updateChannelName } from "@/lib/api";
 import type { ChannelSummary } from "@/lib/api";
 
 function hashHue(name: string): number {
@@ -193,9 +193,11 @@ export default function DashboardClient() {
   async function handleDeleteChannel(e: React.MouseEvent, ch: ChannelSummary) {
     e.preventDefault();
     e.stopPropagation();
-    if (String(ch.id || "").startsWith("supabase:")) return;
+    const isSupabaseOnly = String(ch.id || "").startsWith("supabase:");
     const ok = window.confirm(
-      `Delete ${ch.name}? This won't delete existing analysis reports.`
+      isSupabaseOnly
+        ? `Delete ${ch.name}? This will permanently delete its analyses from Supabase.`
+        : `Delete ${ch.name}? This won't delete existing analysis reports.`
     );
     if (!ok) return;
     setDeletingId(ch.id);
@@ -205,7 +207,11 @@ export default function DashboardClient() {
       return next;
     });
     try {
-      await deleteChannel(ch.id);
+      if (isSupabaseOnly) {
+        await deleteChannelByName(ch.name);
+      } else {
+        await deleteChannel(ch.id);
+      }
       setChannels((prev) => prev.filter((c) => c.id !== ch.id));
     } catch (e: any) {
       setCardErrors((prev) => ({ ...prev, [ch.id]: e?.message ?? "Delete failed" }));
@@ -294,35 +300,34 @@ export default function DashboardClient() {
                   className="group relative block cursor-pointer text-left bg-white/5 border border-white/10 backdrop-blur rounded-2xl overflow-hidden hover:border-cyan-400/50 hover:bg-white/[0.07] transition-all outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
                 >
                   {!readOnly ? (
-                    <>
-                      <button
-                        type="button"
-                        title="Rename channel"
-                        aria-label="Rename channel"
-                        disabled={renamingId === ch.id || deletingId === ch.id}
-                        className="absolute top-2 left-2 z-20 p-1.5 rounded-md text-slate-200 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setEditingId(ch.id);
-                          setEditDraft(ch.name);
-                          setNameEditError("");
-                        }}
-                      >
-                        <PencilIcon className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete channel"
-                        aria-label="Delete channel"
-                        disabled={deletingId === ch.id}
-                        className="absolute top-2 right-2 z-20 p-1.5 rounded-md text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
-                        onClick={(e) => void handleDeleteChannel(e, ch)}
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      title="Rename channel"
+                      aria-label="Rename channel"
+                      disabled={renamingId === ch.id || deletingId === ch.id}
+                      className="absolute top-2 left-2 z-20 p-1.5 rounded-md text-slate-200 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setEditingId(ch.id);
+                        setEditDraft(ch.name);
+                        setNameEditError("");
+                      }}
+                    >
+                      <PencilIcon className="w-4 h-4" />
+                    </button>
                   ) : null}
+
+                  <button
+                    type="button"
+                    title={readOnly ? "Delete Supabase analyses" : "Delete channel"}
+                    aria-label="Delete channel"
+                    disabled={deletingId === ch.id}
+                    className="absolute top-2 right-2 z-20 p-1.5 rounded-md text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
+                    onClick={(e) => void handleDeleteChannel(e, ch)}
+                  >
+                    <TrashIcon className="w-4 h-4" />
+                  </button>
 
                   <div className="relative h-28 border-b border-white/10 overflow-hidden">
                     {thumb && !thumbFailed[ch.id] ? (

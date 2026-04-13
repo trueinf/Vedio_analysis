@@ -86,6 +86,7 @@ from app.supabase_repo import (
     create_signed_upload_url,
     create_signed_download_url,
     rename_channel_name_in_analyses,
+    delete_analyses_by_channel_name,
 )
 from app.services.file_service import build_local_upload_path
 from app.youtube_service import normalize_channel_handle
@@ -1563,6 +1564,18 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e)) from e
         # Supabase analyses rows are never deleted here (historical data preserved).
         return {"success": True, "id": channel_id}
+
+    @app.delete("/api/channels/by-name/{channel_name}")
+    def delete_channel_by_name(channel_name: str) -> dict:
+        """
+        Permanently delete Supabase analyses rows for a channel_name (case-insensitive).
+        This is used for "Supabase-only" channels on the dashboard.
+        """
+        name = (channel_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="channel name is required")
+        deleted = delete_analyses_by_channel_name(channel_name=name)
+        return {"success": True, "channel_name": name, "deleted": int(deleted or 0)}
 
     @app.get("/api/jobs/{job_id}", response_model=JobCreateResponse)
     def get_job(job_id: str, db: Session = Depends(get_db)) -> JobCreateResponse:
