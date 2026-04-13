@@ -987,43 +987,43 @@ def create_app() -> FastAPI:
 
     @app.get("/api/channels/summary", response_model=ChannelSummaryListOut)
     def channels_summary(db: Session = Depends(get_db)) -> ChannelSummaryListOut:
-        """Channel deck: SQLite Channel list + aggregated stats from Supabase analyses (by channel_name)."""
+        """Channel deck: single roster from SQLite Channels + aggregated stats from Supabase analyses."""
         agg = aggregate_analyses_by_channel_name()
+
+        # Ensure every Supabase channel_name has a SQLite Channel row.
+        # This keeps the dashboard on a single channel roster (always editable) without losing analyses.
+        existing = list(db.execute(select(Channel)).scalars().all())
+        by_key: dict[str, Channel] = {(c.name or "").strip().lower(): c for c in existing if (c.name or "").strip()}
+        created_any = False
+        for key, a in (agg or {}).items():
+            k = str(key or "").strip().lower()
+            if not k or k in by_key:
+                continue
+            display = str(a.get("display_name") or key or "").strip()
+            name = display or str(key).strip()
+            if not name:
+                continue
+            # Avoid collisions with case-insensitive uniqueness expectations.
+            exists_ci = db.execute(select(Channel).where(func.lower(Channel.name) == k)).scalar_one_or_none()
+            if exists_ci:
+                by_key[k] = exists_ci
+                continue
+            ch = Channel(id=str(uuid.uuid4()), created_at=datetime.utcnow(), name=name)
+            db.add(ch)
+            by_key[k] = ch
+            created_any = True
+        if created_any:
+            db.commit()
+
         channels = list(db.execute(select(Channel).order_by(Channel.created_at.desc())).scalars().all())
         out: list[ChannelSummaryOut] = []
-        seen_keys: set[str] = set()
         for ch in channels:
             key = ch.name.strip().lower()
-            seen_keys.add(key)
             a = agg.get(key) or {}
             out.append(
                 ChannelSummaryOut(
                     id=ch.id,
                     name=ch.name,
-                    totalVideos=int(a.get("totalVideos") or 0),
-                    completedCount=int(a.get("completedCount") or 0),
-                    processingCount=int(a.get("processingCount") or 0),
-                    avgConfidence=float(round(float(a.get("avgConfidence") or 0.0), 1)),
-                    avgEnergy=float(round(float(a.get("avgEnergy") or 0.0), 1)),
-                    avgEyeContact=float(round(float(a.get("avgEyeContact") or 0.0), 3)),
-                    lastAnalyzedAt=str(a.get("lastAnalyzedAt") or ""),
-                    thumbnailUrl=a.get("thumbnailUrl"),
-                    recentAvgConfidence=a.get("recentAvgConfidence"),
-                    previousAvgConfidence=a.get("previousAvgConfidence"),
-                )
-            )
-
-        # Also surface "Supabase-only" channel names that exist in analyses but not in SQLite Channels yet.
-        # These are read-only in the UI (no rename/delete) but allow navigation to /channel/{name}.
-        for key, a in (agg or {}).items():
-            k = str(key or "").strip().lower()
-            if not k or k in seen_keys:
-                continue
-            name = str(a.get("display_name") or key or "").strip() or str(key)
-            out.append(
-                ChannelSummaryOut(
-                    id=f"supabase:{k}",
-                    name=name,
                     totalVideos=int(a.get("totalVideos") or 0),
                     completedCount=int(a.get("completedCount") or 0),
                     processingCount=int(a.get("processingCount") or 0),
@@ -1508,8 +1508,6 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/channels/{channel_id}", response_model=ChannelRenameSuccessOut)
     def rename_channel(channel_id: str, payload: ChannelRenameIn, db: Session = Depends(get_db)) -> ChannelRenameSuccessOut:
-        if str(channel_id or "").startswith("supabase:"):
-            raise HTTPException(status_code=400, detail="read-only channel (exists only in Supabase analyses)")
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
@@ -1536,11 +1534,10 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/channels/{channel_id}")
     def delete_channel(channel_id: str, db: Session = Depends(get_db)) -> dict:
-        if str(channel_id or "").startswith("supabase:"):
-            raise HTTPException(status_code=400, detail="read-only channel (exists only in Supabase analyses)")
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
+        ch_name = (ch.name or "").strip()
         # If this raised 409 before: detail was
         # "cannot delete channel while dependent database rows still reference it" (IntegrityError on FK).
         # Cascade deletes below (SQLite/Postgres). Job has no channel_id — link is Channel → Collection → Job.
@@ -1562,7 +1559,12 @@ def create_app() -> FastAPI:
             db.rollback()
             logger.exception("Delete channel failed: %s", e)
             raise HTTPException(status_code=500, detail=str(e)) from e
-        # Supabase analyses rows are never deleted here (historical data preserved).
+        # Also delete Supabase analyses for this channel name so it won't reappear on next summary sync.
+        try:
+            if ch_name:
+                delete_analyses_by_channel_name(channel_name=ch_name)
+        except Exception:
+            pass
         return {"success": True, "id": channel_id}
 
     @app.delete("/api/channels/by-name/{channel_name}")
