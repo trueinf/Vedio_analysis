@@ -528,6 +528,9 @@ export async function getChannelCollections(channelId: string): Promise<{ channe
 export type ChannelRenameResult = { success: true; channel: { id: string; name: string } };
 
 export async function updateChannelName(channelId: string, name: string): Promise<ChannelRenameResult> {
+  if (String(channelId || "").startsWith("supabase:")) {
+    throw new Error("This channel is read-only (exists only in Supabase analyses). Create it first to rename.");
+  }
   const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -548,6 +551,9 @@ export async function updateChannelName(channelId: string, name: string): Promis
 }
 
 export async function deleteChannel(channelId: string): Promise<{ success: boolean; id: string }> {
+  if (String(channelId || "").startsWith("supabase:")) {
+    throw new Error("This channel is read-only (exists only in Supabase analyses).");
+  }
   const res = await fetch(`${API_BASE}/api/channels/${channelId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Delete channel failed (${res.status})`);
   return await res.json();

@@ -1507,6 +1507,8 @@ def create_app() -> FastAPI:
 
     @app.patch("/api/channels/{channel_id}", response_model=ChannelRenameSuccessOut)
     def rename_channel(channel_id: str, payload: ChannelRenameIn, db: Session = Depends(get_db)) -> ChannelRenameSuccessOut:
+        if str(channel_id or "").startswith("supabase:"):
+            raise HTTPException(status_code=400, detail="read-only channel (exists only in Supabase analyses)")
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
@@ -1533,6 +1535,8 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/channels/{channel_id}")
     def delete_channel(channel_id: str, db: Session = Depends(get_db)) -> dict:
+        if str(channel_id or "").startswith("supabase:"):
+            raise HTTPException(status_code=400, detail="read-only channel (exists only in Supabase analyses)")
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
