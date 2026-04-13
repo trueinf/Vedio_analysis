@@ -276,6 +276,7 @@ export default function DashboardClient() {
               const last = ch.lastAnalyzedAt || "";
               const thumb = ch.thumbnailUrl?.trim() || null;
               const cardErr = cardErrors[ch.id];
+              const readOnly = String(ch.id || "").startsWith("supabase:");
 
               return (
                 <div
@@ -295,11 +296,12 @@ export default function DashboardClient() {
                     type="button"
                     title="Rename channel"
                     aria-label="Rename channel"
-                    disabled={renamingId === ch.id || deletingId === ch.id}
+                    disabled={readOnly || renamingId === ch.id || deletingId === ch.id}
                     className="absolute top-2 left-2 z-20 p-1.5 rounded-md text-slate-200 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
+                      if (readOnly) return;
                       setEditingId(ch.id);
                       setEditDraft(ch.name);
                       setNameEditError("");
@@ -311,9 +313,16 @@ export default function DashboardClient() {
                     type="button"
                     title="Delete channel"
                     aria-label="Delete channel"
-                    disabled={deletingId === ch.id}
+                    disabled={readOnly || deletingId === ch.id}
                     className="absolute top-2 right-2 z-20 p-1.5 rounded-md text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-40"
-                    onClick={(e) => void handleDeleteChannel(e, ch)}
+                    onClick={(e) => {
+                      if (readOnly) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                      }
+                      void handleDeleteChannel(e, ch);
+                    }}
                   >
                     <TrashIcon className="w-4 h-4" />
                   </button>

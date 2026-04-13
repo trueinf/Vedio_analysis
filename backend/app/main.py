@@ -990,13 +990,39 @@ def create_app() -> FastAPI:
         agg = aggregate_analyses_by_channel_name()
         channels = list(db.execute(select(Channel).order_by(Channel.created_at.desc())).scalars().all())
         out: list[ChannelSummaryOut] = []
+        seen_keys: set[str] = set()
         for ch in channels:
             key = ch.name.strip().lower()
+            seen_keys.add(key)
             a = agg.get(key) or {}
             out.append(
                 ChannelSummaryOut(
                     id=ch.id,
                     name=ch.name,
+                    totalVideos=int(a.get("totalVideos") or 0),
+                    completedCount=int(a.get("completedCount") or 0),
+                    processingCount=int(a.get("processingCount") or 0),
+                    avgConfidence=float(round(float(a.get("avgConfidence") or 0.0), 1)),
+                    avgEnergy=float(round(float(a.get("avgEnergy") or 0.0), 1)),
+                    avgEyeContact=float(round(float(a.get("avgEyeContact") or 0.0), 3)),
+                    lastAnalyzedAt=str(a.get("lastAnalyzedAt") or ""),
+                    thumbnailUrl=a.get("thumbnailUrl"),
+                    recentAvgConfidence=a.get("recentAvgConfidence"),
+                    previousAvgConfidence=a.get("previousAvgConfidence"),
+                )
+            )
+
+        # Also surface "Supabase-only" channel names that exist in analyses but not in SQLite Channels yet.
+        # These are read-only in the UI (no rename/delete) but allow navigation to /channel/{name}.
+        for key, a in (agg or {}).items():
+            k = str(key or "").strip().lower()
+            if not k or k in seen_keys:
+                continue
+            name = str(a.get("display_name") or key or "").strip() or str(key)
+            out.append(
+                ChannelSummaryOut(
+                    id=f"supabase:{k}",
+                    name=name,
                     totalVideos=int(a.get("totalVideos") or 0),
                     completedCount=int(a.get("completedCount") or 0),
                     processingCount=int(a.get("processingCount") or 0),
