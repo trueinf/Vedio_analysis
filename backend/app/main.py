@@ -85,6 +85,7 @@ from app.supabase_repo import (
     ensure_bucket_exists,
     create_signed_upload_url,
     create_signed_download_url,
+    rename_channel_name_in_analyses,
 )
 from app.services.file_service import build_local_upload_path
 from app.youtube_service import normalize_channel_handle
@@ -1483,6 +1484,7 @@ def create_app() -> FastAPI:
         ch = db.get(Channel, channel_id)
         if not ch:
             raise HTTPException(status_code=404, detail="channel not found")
+        old_name = (ch.name or "").strip()
         new_name = (payload.name or "").strip()
         if not new_name:
             raise HTTPException(status_code=400, detail="channel name is required")
@@ -1494,6 +1496,13 @@ def create_app() -> FastAPI:
         ch.name = new_name
         db.commit()
         db.refresh(ch)
+        # Keep Supabase analyses grouped under the renamed display name to avoid "disappearing" channels.
+        try:
+            if old_name and new_name and old_name.lower() != new_name.lower():
+                rename_channel_name_in_analyses(old_name=old_name, new_name=new_name)
+        except Exception:
+            # Best-effort; SQLite rename is still the source of truth for the channel list.
+            pass
         return ChannelRenameSuccessOut(success=True, channel=ChannelIdNameOut(id=ch.id, name=ch.name))
 
     @app.delete("/api/channels/{channel_id}")

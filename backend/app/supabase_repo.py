@@ -253,6 +253,30 @@ def set_analysis_video_storage_path(*, analysis_id: str, video_storage_path: str
 
 
 @supabase_retry()
+def rename_channel_name_in_analyses(*, old_name: str, new_name: str) -> int:
+    """
+    Best-effort migration: update Supabase analyses.channel_name from old -> new (case-insensitive).
+    Returns the number of rows returned by the API client (may be 0 if not supported).
+    """
+    if not _configured():
+        return 0
+    old = (old_name or "").strip()
+    new = (new_name or "").strip()
+    if not old or not new or old.lower() == new.lower():
+        return 0
+    sb = _client()
+    try:
+        # .ilike() is used elsewhere in this repo and works for case-insensitive matching.
+        res = sb.table("analyses").update({"channel_name": new}).ilike("channel_name", old).execute()
+        data = getattr(res, "data", None)
+        if isinstance(data, list):
+            return len(data)
+    except Exception as e:
+        print(f"[Supabase] rename_channel_name_in_analyses FAILED: {e}")
+    return 0
+
+
+@supabase_retry()
 def put_result_json(
     *,
     analysis_id: str,
