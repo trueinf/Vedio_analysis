@@ -1288,6 +1288,13 @@ def create_app() -> FastAPI:
         avg_eye_pct = avg_eye_raw * 100.0 if avg_eye_raw <= 1.0 else avg_eye_raw
         avg_eye_contact = _round1(avg_eye_pct) if completed_videos else 0.0
 
+        filler_vals = [_f(r.get("fillers_per_min")) for r in completed_rows]
+        filler_vals = [v for v in filler_vals if v is not None]
+        avg_filler_rate = _round1(float(statistics.mean([float(v) for v in filler_vals]))) if filler_vals else 0.0
+
+        created_times = [str(r.get("created_at") or "") for r in completed_rows if str(r.get("created_at") or "").strip()]
+        last_analyzed_at = max(created_times) if created_times else ""
+
         # Trend: latest 5 vs previous 5 by created_at desc (requires 10 scored videos)
         scored_for_trend = [
             r for r in completed_rows if _f(r.get("confidence_score")) is not None and str(r.get("created_at") or "").strip()
@@ -1467,6 +1474,8 @@ def create_app() -> FastAPI:
             "avg_energy": avg_energy,
             "avg_wpm": avg_wpm,
             "avg_eye_contact": avg_eye_contact,
+            "avg_filler_rate": avg_filler_rate,
+            "last_analyzed_at": last_analyzed_at,
             "confidence_trend": confidence_trend,
             "recent_avg_confidence": recent_avg_confidence,
             "previous_avg_confidence": previous_avg_confidence,

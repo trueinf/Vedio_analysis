@@ -235,6 +235,8 @@ export type ChannelReport = {
   avg_energy: number;
   avg_wpm: number;
   avg_eye_contact: number;
+  avg_filler_rate?: number;
+  last_analyzed_at?: string;
   confidence_trend: "improving" | "declining" | "stable" | null;
   recent_avg_confidence: number | null;
   previous_avg_confidence: number | null;

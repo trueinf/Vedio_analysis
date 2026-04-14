@@ -110,6 +110,64 @@ function formatDurationChip(totalSec: number): string {
   return `${h}h ${m}m`;
 }
 
+type Verdict = "Strong" | "Good" | "Mixed" | "Developing";
+
+const THRESHOLDS = {
+  confidence: { good: 70, strong: 85 },
+  eye_contact: { good: 70, strong: 85 },
+  filler_words: { good: 4, strong: 2 }, // lower is better
+  energy: { good: 70, strong: 85 },
+} as const;
+
+function verdictForScore(v: number): Verdict {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "Developing";
+  if (x >= 85) return "Strong";
+  if (x >= 70) return "Good";
+  if (x >= 55) return "Mixed";
+  return "Developing";
+}
+
+function getVerdict(value: number, metric: "confidence" | "eye_contact" | "filler_words" | "energy"): Verdict {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return "Developing";
+  if (metric === "filler_words") {
+    if (v <= THRESHOLDS.filler_words.strong) return "Strong";
+    if (v <= THRESHOLDS.filler_words.good) return "Good";
+    if (v <= 6) return "Mixed";
+    return "Developing";
+  }
+  if (v >= 85) return "Strong";
+  if (v >= 70) return "Good";
+  if (v >= 55) return "Mixed";
+  return "Developing";
+}
+
+function verdictTone(verdict: Verdict): { text: string; borderLeft: string; textTone: string } {
+  if (verdict === "Strong") return { text: "text-emerald-200", borderLeft: "border-l-emerald-400", textTone: "text-emerald-300" };
+  if (verdict === "Good") return { text: "text-teal-200", borderLeft: "border-l-teal-400", textTone: "text-teal-300" };
+  if (verdict === "Mixed") return { text: "text-amber-200", borderLeft: "border-l-amber-400", textTone: "text-amber-300" };
+  return { text: "text-red-200", borderLeft: "border-l-red-400", textTone: "text-red-300" };
+}
+
+function formatRelativeTime(iso: string): string {
+  const t = new Date(iso || "").getTime();
+  if (!Number.isFinite(t)) return "—";
+  const now = Date.now();
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  const m = Math.floor(s / 60);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 60) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 24) return `${mo}mo ago`;
+  const y = Math.floor(mo / 12);
+  return `${y}y ago`;
+}
+
 export default function ChannelReportClient(props: { encodedName: string }) {
   const rawName = useMemo(() => {
     try {
@@ -308,105 +366,179 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
       {err ? <div className="mt-4 text-red-400 text-sm">{err}</div> : null}
 
-      <div className="mt-6 flex flex-col sm:flex-row gap-6 sm:items-start">
-        <div
-          className="w-20 h-20 rounded-full flex items-center justify-center text-2xl font-bold text-white border border-white/20 shrink-0"
-          style={{
-            backgroundColor: thumbUrl ? "rgba(15,23,42,0.9)" : `hsl(${hue} 45% 42%)`,
-            backgroundImage: thumbUrl ? `linear-gradient(rgba(15,23,42,0.75), rgba(15,23,42,0.9)), url(${JSON.stringify(thumbUrl)})` : undefined,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-          }}
-        >
-          {!thumbUrl ? initials(displayName) : null}
-        </div>
-        <div className="min-w-0 flex-1">
-          {editingName && summaryMatch ? (
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  disabled={renaming}
-                  className="min-w-0 flex-1 max-w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-2xl font-semibold tracking-tight text-white placeholder:text-slate-500 focus:border-cyan-400/50 focus:outline-none sm:text-3xl"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void commitHeaderRename();
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      cancelHeaderRename();
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  title="Save"
-                  className="shrink-0 rounded-lg px-3 py-2 text-lg text-emerald-300 hover:bg-emerald-400/15 disabled:opacity-40"
-                  disabled={renaming}
-                  onClick={() => void commitHeaderRename()}
-                >
-                  ✓
-                </button>
-                <button
-                  type="button"
-                  title="Cancel"
-                  className="shrink-0 rounded-lg px-3 py-2 text-lg text-slate-400 hover:bg-white/10 disabled:opacity-40"
-                  disabled={renaming}
-                  onClick={cancelHeaderRename}
-                >
-                  ✗
-                </button>
-              </div>
-              {nameEditErr ? <div className="text-sm text-red-400">{nameEditErr}</div> : null}
+      {/* LAYER A — CAPABILITY (Hero section) */}
+      <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/40 backdrop-blur p-5 sm:p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <div className="lg:col-span-8 flex gap-4">
+            <div
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center text-xl sm:text-2xl font-bold text-white border border-white/20 shrink-0"
+              style={{
+                backgroundColor: thumbUrl ? "rgba(15,23,42,0.9)" : `hsl(${hue} 45% 42%)`,
+                backgroundImage: thumbUrl
+                  ? `linear-gradient(rgba(15,23,42,0.75), rgba(15,23,42,0.9)), url(${JSON.stringify(thumbUrl)})`
+                  : undefined,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }}
+            >
+              {!thumbUrl ? initials(displayName) : null}
             </div>
-          ) : (
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-3xl font-semibold tracking-tight">{titleCase(displayName)}</h1>
-              {summaryMatch?.id ? (
-                <button
-                  type="button"
-                  title="Rename channel"
-                  aria-label="Rename channel"
-                  className="rounded-md p-1.5 text-slate-400 hover:text-white hover:bg-white/10 min-h-[44px] min-w-[44px] flex items-center justify-center"
-                  onClick={() => {
-                    setEditingName(true);
-                    setNameDraft(summaryMatch.name);
-                    setNameEditErr("");
-                  }}
-                >
-                  <PencilIcon className="w-5 h-5" />
-                </button>
-              ) : null}
-            </div>
-          )}
-          <p className="text-slate-400 text-sm mt-1">
-            {totals.totalVideos} video{totals.totalVideos === 1 ? "" : "s"} · Active since {activeSince}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {[
-              { label: "Typical confidence", value: loading ? "—" : String(totals.benchConf) },
-              { label: "Typical energy", value: loading ? "—" : String(totals.benchEnergy) },
-              { label: "Typical WPM", value: loading ? "—" : String(totals.benchWpm) },
-              { label: "Typical eye contact", value: loading ? "—" : `${totals.benchEye}%` },
-              {
-                label: "Total runtime",
-                value: loading ? "—" : formatDurationChip(Number(report?.total_duration_sec ?? 0)),
-              },
-            ].map((p) => (
-              <div
-                key={p.label}
-                className="px-3 py-1.5 rounded-full text-xs border border-white/10 bg-white/5 text-slate-200"
-              >
-                <span className="text-slate-500">{p.label}</span>{" "}
-                <span className="font-semibold text-white">{p.value}</span>
+
+            <div className="min-w-0 flex-1">
+              {editingName && summaryMatch ? (
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={nameDraft}
+                      onChange={(e) => setNameDraft(e.target.value)}
+                      disabled={renaming}
+                      className="min-w-0 flex-1 max-w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-[22px] font-bold tracking-tight text-white placeholder:text-slate-500 focus:border-cyan-400/50 focus:outline-none"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void commitHeaderRename();
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelHeaderRename();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      title="Save"
+                      className="shrink-0 rounded-lg px-3 py-2 text-lg text-emerald-300 hover:bg-emerald-400/15 disabled:opacity-40"
+                      disabled={renaming}
+                      onClick={() => void commitHeaderRename()}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      type="button"
+                      title="Cancel"
+                      className="shrink-0 rounded-lg px-3 py-2 text-lg text-slate-400 hover:bg-white/10 disabled:opacity-40"
+                      disabled={renaming}
+                      onClick={cancelHeaderRename}
+                    >
+                      ✗
+                    </button>
+                  </div>
+                  {nameEditErr ? <div className="text-sm text-red-400">{nameEditErr}</div> : null}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="text-[22px] font-bold tracking-tight text-white truncate max-w-full">
+                    {titleCase(displayName)}
+                  </div>
+                  {summaryMatch?.id ? (
+                    <button
+                      type="button"
+                      title="Rename channel"
+                      aria-label="Rename channel"
+                      className="rounded-md p-1.5 text-slate-400 hover:text-white hover:bg-white/10 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                      onClick={() => {
+                        setEditingName(true);
+                        setNameDraft(summaryMatch.name);
+                        setNameEditErr("");
+                      }}
+                    >
+                      <PencilIcon className="w-5 h-5" />
+                    </button>
+                  ) : null}
+                </div>
+              )}
+
+              <div className="mt-1 text-sm text-slate-300">
+                {Math.max(0, totals.totalVideos)} videos analysed ·{" "}
+                {loading ? "—" : `${formatDurationChip(Number(report?.total_duration_sec ?? 0))} of content reviewed`}
               </div>
-            ))}
+              <div className="mt-0.5 text-sm text-slate-400">
+                Active since {activeSince} · Last analysed{" "}
+                {loading ? "—" : formatRelativeTime(String(report?.last_analyzed_at ?? ""))}
+              </div>
+
+              <p className="mt-4 text-sm text-slate-300 leading-relaxed max-w-2xl">
+                We extract 7 delivery signals from every frame and second of audio — presence, clarity, pace, eye
+                contact, gestures, tone, and expression.
+              </p>
+            </div>
+          </div>
+
+          <div className="lg:col-span-4">
+            {(() => {
+              const overall = Math.round(Number(report?.avg_confidence ?? 0) || 0);
+              const verdict = verdictForScore(overall);
+              const tone = verdictTone(verdict);
+              return (
+                <div className={`rounded-2xl border border-white/10 bg-white/5 p-5 sm:p-6 ${tone.borderLeft} border-l-4`}>
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Overall delivery score</div>
+                  <div className="mt-2 text-5xl font-bold tabular-nums text-white">{loading ? "—" : overall}</div>
+                  <div className={`mt-1 text-sm font-semibold ${tone.textTone}`}>{verdict}</div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
+
+      {/* LAYER B1 — AT A GLANCE (4 hero KPIs) */}
+      <section className="mt-10" aria-labelledby="at-a-glance-heading">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500">At a glance</div>
+        <h2 id="at-a-glance-heading" className="mt-2 text-lg font-semibold">
+          At a glance
+        </h2>
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {(() => {
+            const avgConfidence = Math.round(Number(report?.avg_confidence ?? 0) || 0);
+            const avgEnergy = Math.round(Number(report?.avg_energy ?? 0) || 0);
+            const avgEye = Math.round(Number(report?.avg_eye_contact ?? 0) || 0);
+            const avgFillers = Number(report?.avg_filler_rate ?? NaN);
+            const fillersVal = Number.isFinite(avgFillers) ? Number(avgFillers.toFixed(1)) : NaN;
+
+            const items = [
+              {
+                key: "confidence",
+                name: "Confidence Score",
+                value: loading ? "—" : String(avgConfidence),
+                verdict: getVerdict(avgConfidence, "confidence"),
+              },
+              {
+                key: "eye",
+                name: "Eye Contact",
+                value: loading ? "—" : `${avgEye}%`,
+                verdict: getVerdict(avgEye, "eye_contact"),
+              },
+              {
+                key: "fillers",
+                name: "Filler Words",
+                value: loading ? "—" : Number.isFinite(fillersVal) ? `${fillersVal}/min` : "—",
+                verdict: getVerdict(Number.isFinite(fillersVal) ? fillersVal : 999, "filler_words"),
+              },
+              {
+                key: "energy",
+                name: "Energy Score",
+                value: loading ? "—" : String(avgEnergy),
+                verdict: getVerdict(avgEnergy, "energy"),
+              },
+            ] as const;
+
+            return items.map((it) => {
+              const tone = verdictTone(it.verdict);
+              return (
+                <div
+                  key={it.key}
+                  className={`rounded-2xl bg-white/5 border border-white/10 p-4 ${tone.borderLeft} border-l-4`}
+                >
+                  <div className="text-[12px] uppercase tracking-wide text-slate-400">{it.name}</div>
+                  <div className="mt-2 text-3xl font-bold tabular-nums text-white">{it.value}</div>
+                  <div className={`mt-2 text-sm font-semibold ${tone.textTone}`}>{it.verdict}</div>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      </section>
 
       <section id="channel-benchmark" className="mt-10 scroll-mt-8" aria-labelledby="channel-benchmark-heading">
         <h2 id="channel-benchmark-heading" className="text-lg font-semibold">
