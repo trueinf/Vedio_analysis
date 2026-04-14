@@ -366,6 +366,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
   const [nameDraft, setNameDraft] = useState("");
   const [nameEditErr, setNameEditErr] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const [appendixOpen, setAppendixOpen] = useState(false);
   const nameErrTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showNameErr(msg: string) {
@@ -1043,82 +1044,98 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         })()}
       </section>
 
-      <section id="channel-benchmark" className="mt-10 scroll-mt-8" aria-labelledby="channel-benchmark-heading">
-        <h2 id="channel-benchmark-heading" className="text-lg font-semibold">
-          Channel benchmark
-        </h2>
-        <p className="mt-1 text-sm text-slate-400 max-w-3xl">
-          Numbers below describe <span className="text-slate-300">this entire channel</span>: typical values, where most videos sit, and the full spread. Each metric counts how many completed videos could be scored.
-        </p>
-        {loading ? (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-20 bg-white/5 border border-white/10 rounded-2xl animate-pulse" />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            {(() => {
-              const b = report?.benchmark ?? {};
-              const items = [
-                { key: "confidence", label: "Confidence", fmt: { format: "int" as const }, tone: "text-cyan-200" },
-                { key: "energy", label: "Energy", fmt: { format: "int" as const }, tone: "text-emerald-200" },
-                { key: "wpm", label: "WPM", fmt: { format: "int" as const, suffix: " WPM" }, tone: "text-amber-200" },
-                { key: "eye_contact_pct", label: "Eye contact", fmt: { format: "pct0" as const }, tone: "text-indigo-200" },
-                { key: "fillers_per_min", label: "Fillers", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-rose-200" },
-                { key: "gestures_per_min", label: "Gestures", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-teal-200" },
-                { key: "expression_changes_per_min", label: "Expressions", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-sky-200" },
-                { key: "tonal", label: "Tonal score", fmt: { format: "float1" as const }, tone: "text-fuchsia-200" },
-              ] as const;
-              return items.map((it) => {
-                const row = (b as any)[it.key] as
-                  | {
-                      n?: number;
-                      missing?: number;
-                      p10?: number | null;
-                      p25?: number | null;
-                      p50?: number | null;
-                      p75?: number | null;
-                      p90?: number | null;
-                      hist?: { labels?: string[]; counts?: number[] };
-                    }
-                  | undefined;
-                const n = Number(row?.n ?? 0) || 0;
-                const missing = Number(row?.missing ?? 0) || 0;
-                const p10 = row?.p10 ?? null;
-                const p25 = row?.p25 ?? null;
-                const p50 = row?.p50 ?? null;
-                const p75 = row?.p75 ?? null;
-                const p90 = row?.p90 ?? null;
-                const histLabels = (row?.hist?.labels ?? []) as string[];
-                const histCounts = (row?.hist?.counts ?? []) as number[];
-                return (
-                  <div key={it.key} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <div className="text-sm font-semibold">{it.label}</div>
-                      <div className="text-xs text-slate-500 tabular-nums">
-                        {n} scored
-                        {missing ? <span className="text-slate-600"> · {missing} not scored</span> : null}
+      {/* APPENDIX — Collapsed by default */}
+      <button
+        type="button"
+        className="mt-10 w-full rounded-2xl border border-white/10 bg-white/5 hover:bg-white/[0.07] text-slate-200 px-4 py-3 text-sm flex items-center justify-center gap-2 transition-colors"
+        onClick={() => setAppendixOpen((v) => !v)}
+        aria-expanded={appendixOpen}
+        aria-controls="channel-appendix"
+      >
+        <span className="font-medium">{appendixOpen ? "Hide full analysis" : "Show full analysis"}</span>
+        <span className={`inline-block transition-transform ${appendixOpen ? "rotate-180" : "rotate-0"}`} aria-hidden>
+          ↓
+        </span>
+      </button>
+
+      {appendixOpen ? (
+        <div id="channel-appendix" className="mt-6">
+          <section id="channel-benchmark" className="mt-10 scroll-mt-8" aria-labelledby="channel-benchmark-heading">
+            <h2 id="channel-benchmark-heading" className="text-lg font-semibold">
+              Channel benchmark
+            </h2>
+            <p className="mt-1 text-sm text-slate-400 max-w-3xl">
+              Numbers below describe <span className="text-slate-300">this entire channel</span>: typical values, where most videos sit, and the full spread. Each metric counts how many completed videos could be scored.
+            </p>
+            {loading ? (
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className="h-20 bg-white/5 border border-white/10 rounded-2xl animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                {(() => {
+                  const b = report?.benchmark ?? {};
+                  const items = [
+                    { key: "confidence", label: "Confidence", fmt: { format: "int" as const }, tone: "text-cyan-200" },
+                    { key: "energy", label: "Energy", fmt: { format: "int" as const }, tone: "text-emerald-200" },
+                    { key: "wpm", label: "WPM", fmt: { format: "int" as const, suffix: " WPM" }, tone: "text-amber-200" },
+                    { key: "eye_contact_pct", label: "Eye contact", fmt: { format: "pct0" as const }, tone: "text-indigo-200" },
+                    { key: "fillers_per_min", label: "Fillers", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-rose-200" },
+                    { key: "gestures_per_min", label: "Gestures", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-teal-200" },
+                    { key: "expression_changes_per_min", label: "Expressions", fmt: { format: "float1" as const, suffix: "/min" }, tone: "text-sky-200" },
+                    { key: "tonal", label: "Tonal score", fmt: { format: "float1" as const }, tone: "text-fuchsia-200" },
+                  ] as const;
+                  return items.map((it) => {
+                    const row = (b as any)[it.key] as
+                      | {
+                          n?: number;
+                          missing?: number;
+                          p10?: number | null;
+                          p25?: number | null;
+                          p50?: number | null;
+                          p75?: number | null;
+                          p90?: number | null;
+                          hist?: { labels?: string[]; counts?: number[] };
+                        }
+                      | undefined;
+                    const n = Number(row?.n ?? 0) || 0;
+                    const missing = Number(row?.missing ?? 0) || 0;
+                    const p10 = row?.p10 ?? null;
+                    const p25 = row?.p25 ?? null;
+                    const p50 = row?.p50 ?? null;
+                    const p75 = row?.p75 ?? null;
+                    const p90 = row?.p90 ?? null;
+                    const histLabels = (row?.hist?.labels ?? []) as string[];
+                    const histCounts = (row?.hist?.counts ?? []) as number[];
+                    return (
+                      <div key={it.key} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <div className="text-sm font-semibold">{it.label}</div>
+                          <div className="text-xs text-slate-500 tabular-nums">
+                            {n} scored
+                            {missing ? <span className="text-slate-600"> · {missing} not scored</span> : null}
+                          </div>
+                        </div>
+                        <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">Typical</div>
+                        <div className={`mt-0.5 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
+                        <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Usual range (most videos)</div>
+                        <div className="mt-0.5 text-xs text-slate-300 tabular-nums">
+                          {fmtBench(p25, it.fmt)} – {fmtBench(p75, it.fmt)}
+                        </div>
+                        <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Full spread (rare lows &amp; highs)</div>
+                        <div className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
+                          {fmtBench(p10, it.fmt)} – {fmtBench(p90, it.fmt)}
+                        </div>
+                        <HistBar labels={histLabels} counts={histCounts} />
                       </div>
-                    </div>
-                    <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">Typical</div>
-                    <div className={`mt-0.5 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
-                    <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Usual range (most videos)</div>
-                    <div className="mt-0.5 text-xs text-slate-300 tabular-nums">
-                      {fmtBench(p25, it.fmt)} – {fmtBench(p75, it.fmt)}
-                    </div>
-                    <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Full spread (rare lows &amp; highs)</div>
-                    <div className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
-                      {fmtBench(p10, it.fmt)} – {fmtBench(p90, it.fmt)}
-                    </div>
-                    <HistBar labels={histLabels} counts={histCounts} />
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        )}
-      </section>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+          </section>
 
       <section className="mt-8 scroll-mt-8" aria-labelledby="coverage-heading">
         <h3 id="coverage-heading" className="text-sm font-semibold text-slate-200">
@@ -1349,6 +1366,8 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         </div>
       </div>
       </section>
+        </div>
+      ) : null}
     </div>
   );
 }
