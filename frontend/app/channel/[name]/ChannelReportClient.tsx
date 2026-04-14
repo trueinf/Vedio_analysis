@@ -1174,69 +1174,6 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             )}
           </section>
 
-      <section className="mt-8 scroll-mt-8" aria-labelledby="coverage-heading">
-        <h3 id="coverage-heading" className="text-sm font-semibold text-slate-200">
-          How complete is the data?
-        </h3>
-        <p className="mt-1 text-xs text-slate-500 max-w-3xl">
-          Per metric: how many completed videos could be scored, and how reliable the channel-wide picture is. Strong = many videos; Early = still building the picture.
-        </p>
-        <div className="mt-3 overflow-x-auto rounded-2xl border border-white/10 bg-white/5">
-          <table className="w-full text-sm min-w-[760px]">
-            <thead className="text-left text-slate-400 border-b border-white/10">
-              <tr>
-                <th className="px-4 py-3">Metric</th>
-                <th className="px-4 py-3">Videos scored</th>
-                <th className="px-4 py-3">Couldn&apos;t score</th>
-                <th className="px-4 py-3">Share of completed</th>
-                <th className="px-4 py-3">Reliability</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(() => {
-                const completed = Math.max(0, Number(report?.completed_videos ?? 0) || 0);
-                const b = report?.benchmark ?? {};
-                const rows = [
-                  { key: "confidence", label: "Confidence" },
-                  { key: "energy", label: "Energy" },
-                  { key: "wpm", label: "WPM" },
-                  { key: "eye_contact_pct", label: "Eye contact" },
-                  { key: "fillers_per_min", label: "Fillers / min" },
-                  { key: "gestures_per_min", label: "Gestures / min" },
-                  { key: "expression_changes_per_min", label: "Expressions / min" },
-                  { key: "tonal", label: "Tonal score" },
-                ] as const;
-
-                const stabilityBadge = (n: number) => {
-                  if (n >= 20) return { text: "Strong", cls: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200" };
-                  if (n >= 10) return { text: "OK", cls: "border-amber-400/30 bg-amber-400/10 text-amber-200" };
-                  return { text: "Early", cls: "border-white/15 bg-white/5 text-slate-300" };
-                };
-
-                return rows.map((r) => {
-                  const row = (b as any)[r.key] as { n?: number; missing?: number } | undefined;
-                  const n = Math.max(0, Number(row?.n ?? 0) || 0);
-                  const missing = Math.max(0, Number(row?.missing ?? Math.max(0, completed - n)) || 0);
-                  const coverage = completed > 0 ? Math.round((n / completed) * 100) : 0;
-                  const st = stabilityBadge(n);
-                  return (
-                    <tr key={r.key} className="border-b border-white/5">
-                      <td className="px-4 py-3 text-slate-200">{r.label}</td>
-                      <td className="px-4 py-3 tabular-nums text-slate-200">{n}</td>
-                      <td className="px-4 py-3 tabular-nums text-slate-400">{missing}</td>
-                      <td className="px-4 py-3 tabular-nums text-slate-200">{completed ? `${coverage}%` : "—"}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${st.cls}`}>{st.text}</span>
-                      </td>
-                    </tr>
-                  );
-                });
-              })()}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       <section id="metrics-at-a-glance" className="mt-10 scroll-mt-8" aria-labelledby="metrics-heading">
         <h2 id="metrics-heading" className="text-lg font-semibold">
           At a glance
