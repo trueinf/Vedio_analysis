@@ -130,9 +130,24 @@ function verdictForScore(v: number): Verdict {
   return "Developing";
 }
 
-function getVerdict(value: number, metric: "confidence" | "eye_contact" | "filler_words" | "energy"): Verdict {
+function getVerdict(
+  value: number,
+  metric: "confidence" | "eye_contact" | "filler_words" | "energy" | "wpm" | "gestures"
+): Verdict {
   const v = Number(value);
   if (!Number.isFinite(v)) return "Developing";
+  if (metric === "wpm") {
+    // Range-based, not higher-is-better. No "Strong" for WPM.
+    if (v >= 95 && v <= 160) return "Good";
+    if ((v >= 80 && v < 95) || (v > 160 && v <= 180)) return "Mixed";
+    return "Developing";
+  }
+  if (metric === "gestures") {
+    if (v >= 12) return "Strong";
+    if (v >= 8) return "Good";
+    if (v >= 4) return "Mixed";
+    return "Developing";
+  }
   if (metric === "filler_words") {
     if (v <= THRESHOLDS.filler_words.strong) return "Strong";
     if (v <= THRESHOLDS.filler_words.good) return "Good";
@@ -670,13 +685,23 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         <h2 id="at-a-glance-heading" className="mt-2 text-lg font-semibold">
           At a glance
         </h2>
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <p className="mt-1 text-sm text-slate-400">
+          The four signals that matter most — averaged across all {Math.max(0, Number(report?.completed_videos ?? 0) || 0)} completed videos.
+        </p>
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3">
           {(() => {
             const avgConfidence = Math.round(Number(report?.avg_confidence ?? 0) || 0);
             const avgEnergy = Math.round(Number(report?.avg_energy ?? 0) || 0);
             const avgEye = Math.round(Number(report?.avg_eye_contact ?? 0) || 0);
             const avgFillers = Number(report?.avg_filler_rate ?? NaN);
             const fillersVal = Number.isFinite(avgFillers) ? Number(avgFillers.toFixed(1)) : NaN;
+            const avgWpm = Math.round(Number(report?.avg_wpm ?? 0) || 0);
+
+            const gestureVals = (report?.individual_videos || [])
+              .map((v) => Number(v?.metrics?.gesture_rate))
+              .filter((x) => Number.isFinite(x));
+            const avgGestureRate =
+              gestureVals.length > 0 ? gestureVals.reduce((a, b) => a + b, 0) / gestureVals.length : 0;
 
             const items = [
               {
@@ -702,6 +727,18 @@ export default function ChannelReportClient(props: { encodedName: string }) {
                 name: "Energy Score",
                 value: loading ? "—" : String(avgEnergy),
                 verdict: getVerdict(avgEnergy, "energy"),
+              },
+              {
+                key: "wpm",
+                name: "Speech Rate",
+                value: loading ? "—" : `${avgWpm} WPM`,
+                verdict: getVerdict(avgWpm, "wpm"),
+              },
+              {
+                key: "gestures",
+                name: "Gestures",
+                value: loading ? "—" : `${Number(avgGestureRate || 0).toFixed(1)}/min`,
+                verdict: getVerdict(Number(avgGestureRate || 0), "gestures"),
               },
             ] as const;
 
