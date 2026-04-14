@@ -647,7 +647,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
               )}
 
               <div className="mt-1 text-sm text-slate-300">
-                {Math.max(0, totals.totalVideos)} videos analysed ·{" "}
+                {Math.max(0, totals.completedVideos)} videos analysed ·{" "}
                 {loading ? "—" : `${formatDurationChip(Number(report?.total_duration_sec ?? 0))} of content reviewed`}
               </div>
               <div className="mt-0.5 text-sm text-slate-400">
