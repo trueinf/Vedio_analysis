@@ -10,8 +10,10 @@ export function MetricDetailModal(props: {
   detail: MetricDetailPayload | null;
   onApplyToTimeline?: () => void;
   resultLabel?: string;
+  /** Channel report: friendlier section titles, no single-video framing. */
+  benchmarkMode?: boolean;
 }) {
-  const { open, onClose, detail, onApplyToTimeline, resultLabel } = props;
+  const { open, onClose, detail, onApplyToTimeline, resultLabel, benchmarkMode } = props;
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +61,9 @@ export function MetricDetailModal(props: {
 
         <div className="overflow-y-auto p-4 space-y-4 flex-1">
           <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-            <div className="text-xs uppercase tracking-wide text-slate-400">{resultLabel || "Your result"}</div>
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              {resultLabel || (benchmarkMode ? "Typical for this channel" : "Your result")}
+            </div>
             <div className="mt-1 flex flex-wrap items-baseline gap-2">
               <span className="text-2xl font-semibold">{d.valueLine}</span>
               <span className="text-xs px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-200 border border-cyan-400/30">
@@ -103,17 +107,17 @@ export function MetricDetailModal(props: {
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-slate-200">How we label it</h3>
+            <h3 className="text-sm font-semibold text-slate-200">{benchmarkMode ? "How to read this" : "How we label it"}</h3>
             <p className="text-sm text-slate-300 mt-1 leading-relaxed">{d.targetRange}</p>
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-slate-200">How it&apos;s measured</h3>
+            <h3 className="text-sm font-semibold text-slate-200">{benchmarkMode ? "Where this comes from" : "How it&apos;s measured"}</h3>
             <p className="text-sm text-slate-300 mt-1 leading-relaxed">{d.howMeasured}</p>
           </section>
 
           <section>
-            <h3 className="text-sm font-semibold text-slate-200">On your timeline</h3>
+            <h3 className="text-sm font-semibold text-slate-200">{benchmarkMode ? "Scope" : "On your timeline"}</h3>
             <ul className="mt-1 max-h-44 overflow-y-auto text-sm text-slate-300 list-disc pl-5 space-y-1 pr-1">
               {d.timelineLines.map((line, i) => (
                 <li key={i}>{line}</li>
@@ -125,7 +129,7 @@ export function MetricDetailModal(props: {
         </div>
 
         <div className="p-4 border-t border-white/10 flex flex-col sm:flex-row gap-2 shrink-0 bg-slate-900/80">
-          {onApplyToTimeline ? (
+          {onApplyToTimeline && !benchmarkMode ? (
             <Button variant="premium" className="flex-1" type="button" onClick={onApplyToTimeline}>
               Show on timeline
             </Button>

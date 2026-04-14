@@ -1,8 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import {
+  benchmarkKeyForMetric,
+  buildBenchmarkMetricDetail,
+  metricBenchmarkHint,
+} from "./benchmarkMetricDetail";
 import { buildMetricDetail, metricCardHint, type MetricDetailContext } from "./metricDetailContent";
 import { MetricDetailModal } from "./MetricDetailModal";
+import type { ChannelReport } from "@/lib/api";
 import type { MetricEvent, MetricKey } from "./video-analysis-types";
 import { Card } from "./ui";
 
@@ -99,11 +105,29 @@ export function MetricsGrid(props: {
   durationSec: number;
   eyeNotMeasurable: boolean;
   metricDetailContext?: MetricDetailContext | null;
+  /** When set with detailMode "benchmark", modal uses whole-channel copy (not single-video coaching). */
+  channelBenchmark?: {
+    completedVideos: number;
+    benchmark: NonNullable<ChannelReport["benchmark"]>;
+  } | null;
 }) {
   const [detailMetric, setDetailMetric] = useState<MetricKey | null>(null);
 
+  const useChannelBenchmarkModal =
+    props.detailMode === "benchmark" && props.channelBenchmark?.benchmark != null;
+
   const detailPayload = useMemo(() => {
     if (!detailMetric) return null;
+    if (useChannelBenchmarkModal && props.channelBenchmark) {
+      const bkey = benchmarkKeyForMetric(detailMetric);
+      const row = props.channelBenchmark.benchmark[bkey];
+      return buildBenchmarkMetricDetail(
+        detailMetric,
+        props.cards,
+        row,
+        props.channelBenchmark.completedVideos
+      );
+    }
     return buildMetricDetail(
       detailMetric,
       props.cards,
@@ -112,7 +136,27 @@ export function MetricsGrid(props: {
       props.eyeNotMeasurable,
       props.metricDetailContext ?? null
     );
-  }, [detailMetric, props.cards, props.durationSec, props.events, props.eyeNotMeasurable, props.metricDetailContext]);
+  }, [
+    detailMetric,
+    props.cards,
+    props.durationSec,
+    props.events,
+    props.eyeNotMeasurable,
+    props.metricDetailContext,
+    useChannelBenchmarkModal,
+    props.channelBenchmark,
+  ]);
+
+  const cardHint = (metric: MetricKey) => {
+    if (useChannelBenchmarkModal) return metricBenchmarkHint(metric, props.cards);
+    if (metric === "speech_rate") {
+      return metricCardHint("speech_rate", cardSnapshot, props.eyeNotMeasurable, {
+        useDemoWpm: demoSpeech,
+        demoWpm: props.demoMetricValue,
+      });
+    }
+    return metricCardHint(metric, cardSnapshot, props.eyeNotMeasurable);
+  };
 
   const openDetail = (metric: MetricKey) => {
     props.onSelectMetric(metric);
@@ -148,10 +192,7 @@ export function MetricsGrid(props: {
             if (w > 160) return { text: "Fast", tone: "warn" as const };
             return { text: "Normal", tone: "good" as const };
           })()}
-          hint={metricCardHint("speech_rate", cardSnapshot, props.eyeNotMeasurable, {
-            useDemoWpm: demoSpeech,
-            demoWpm: props.demoMetricValue,
-          })}
+          hint={cardHint("speech_rate")}
         />
         <StatCard
           title="Filler Words"
@@ -167,7 +208,7 @@ export function MetricsGrid(props: {
             if (f <= 5) return { text: "Moderate", tone: "warn" as const };
             return { text: "High", tone: "bad" as const };
           })()}
-          hint={metricCardHint("filler_words", cardSnapshot, props.eyeNotMeasurable)}
+          hint={cardHint("filler_words")}
         />
         <StatCard
           title="Eye Contact"
@@ -184,7 +225,7 @@ export function MetricsGrid(props: {
             if (pct >= 30) return { text: "Decent", tone: "warn" as const };
             return { text: "Low", tone: "bad" as const };
           })()}
-          hint={metricCardHint("eye_contact", cardSnapshot, props.eyeNotMeasurable)}
+          hint={cardHint("eye_contact")}
         />
         <StatCard
           title="Gestures"
@@ -200,7 +241,7 @@ export function MetricsGrid(props: {
             if (g <= 20) return { text: "Normal", tone: "good" as const };
             return { text: "High", tone: "warn" as const };
           })()}
-          hint={metricCardHint("gestures", cardSnapshot, props.eyeNotMeasurable)}
+          hint={cardHint("gestures")}
         />
         <StatCard
           title="Tonal Variation"
@@ -233,7 +274,7 @@ export function MetricsGrid(props: {
                 : "neutral";
             return { text, tone: tone as "good" | "warn" | "bad" | "neutral" };
           })()}
-          hint={metricCardHint("tonal_variation", cardSnapshot, props.eyeNotMeasurable)}
+          hint={cardHint("tonal_variation")}
         />
         <StatCard
           title="Expressions"
@@ -246,7 +287,7 @@ export function MetricsGrid(props: {
             text: props.cards.exprBadge === "low" ? "Low" : props.cards.exprBadge === "high" ? "High" : "Normal",
             tone: props.cards.exprBadge === "normal" ? "good" : "warn",
           }}
-          hint={metricCardHint("expression_change", cardSnapshot, props.eyeNotMeasurable)}
+          hint={cardHint("expression_change")}
         />
       </div>
 
@@ -254,7 +295,8 @@ export function MetricsGrid(props: {
         open={detailMetric != null}
         onClose={() => setDetailMetric(null)}
         detail={detailPayload}
-        resultLabel={props.detailMode === "benchmark" ? "Channel benchmark (p50)" : "Your result"}
+        resultLabel={props.detailMode === "benchmark" ? "Typical for this channel" : "Your result"}
+        benchmarkMode={useChannelBenchmarkModal}
       />
     </>
   );

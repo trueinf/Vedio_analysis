@@ -1254,10 +1254,10 @@ def create_app() -> FastAPI:
                     out["hist"] = _hist_by_predicates(
                         vals,
                         [
-                            ("≤p25", lambda x, p25=p25: x <= p25),
-                            ("p25–p50", lambda x, p25=p25, p50=p50: p25 < x <= p50),
-                            ("p50–p75", lambda x, p50=p50, p75=p75: p50 < x <= p75),
-                            (">p75", lambda x, p75=p75: x > p75),
+                            ("Lowest band", lambda x, p25=p25: x <= p25),
+                            ("Low–mid", lambda x, p25=p25, p50=p50: p25 < x <= p50),
+                            ("Mid–high", lambda x, p50=p50, p75=p75: p50 < x <= p75),
+                            ("Highest band", lambda x, p75=p75: x > p75),
                         ],
                     )
 

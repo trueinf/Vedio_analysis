@@ -387,10 +387,10 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
-              { label: "Benchmark Confidence (p50)", value: loading ? "—" : String(totals.benchConf) },
-              { label: "Benchmark Energy (p50)", value: loading ? "—" : String(totals.benchEnergy) },
-              { label: "Benchmark WPM (p50)", value: loading ? "—" : String(totals.benchWpm) },
-              { label: "Benchmark Eye (p50)", value: loading ? "—" : `${totals.benchEye}%` },
+              { label: "Typical confidence", value: loading ? "—" : String(totals.benchConf) },
+              { label: "Typical energy", value: loading ? "—" : String(totals.benchEnergy) },
+              { label: "Typical WPM", value: loading ? "—" : String(totals.benchWpm) },
+              { label: "Typical eye contact", value: loading ? "—" : `${totals.benchEye}%` },
               {
                 label: "Total runtime",
                 value: loading ? "—" : formatDurationChip(Number(report?.total_duration_sec ?? 0)),
@@ -408,10 +408,12 @@ export default function ChannelReportClient(props: { encodedName: string }) {
         </div>
       </div>
 
-      <div className="mt-10">
-        <h2 className="text-lg font-semibold">All-time benchmark</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Median (p50) with typical range (p25–p75). Sample size (n) is per-metric across all completed videos.
+      <section id="channel-benchmark" className="mt-10 scroll-mt-8" aria-labelledby="channel-benchmark-heading">
+        <h2 id="channel-benchmark-heading" className="text-lg font-semibold">
+          Channel benchmark
+        </h2>
+        <p className="mt-1 text-sm text-slate-400 max-w-3xl">
+          Numbers below describe <span className="text-slate-300">this entire channel</span>: typical values, where most videos sit, and the full spread. Each metric counts how many completed videos could be scored.
         </p>
         {loading ? (
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -460,16 +462,19 @@ export default function ChannelReportClient(props: { encodedName: string }) {
                     <div className="flex items-baseline justify-between gap-2">
                       <div className="text-sm font-semibold">{it.label}</div>
                       <div className="text-xs text-slate-500 tabular-nums">
-                        n={n}
-                        {missing ? <span className="text-slate-600"> · missing {missing}</span> : null}
+                        {n} scored
+                        {missing ? <span className="text-slate-600"> · {missing} not scored</span> : null}
                       </div>
                     </div>
-                    <div className={`mt-2 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
-                    <div className="mt-1 text-xs text-slate-400 tabular-nums">
+                    <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">Typical</div>
+                    <div className={`mt-0.5 text-2xl font-bold tabular-nums ${it.tone}`}>{fmtBench(p50, it.fmt)}</div>
+                    <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Usual range (most videos)</div>
+                    <div className="mt-0.5 text-xs text-slate-300 tabular-nums">
                       {fmtBench(p25, it.fmt)} – {fmtBench(p75, it.fmt)}
                     </div>
-                    <div className="mt-1 text-[10px] text-slate-500 tabular-nums">
-                      p10 {fmtBench(p10, it.fmt)} · p90 {fmtBench(p90, it.fmt)}
+                    <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">Full spread (rare lows &amp; highs)</div>
+                    <div className="mt-0.5 text-[10px] text-slate-500 tabular-nums">
+                      {fmtBench(p10, it.fmt)} – {fmtBench(p90, it.fmt)}
                     </div>
                     <HistBar labels={histLabels} counts={histCounts} />
                   </div>
@@ -478,22 +483,24 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             })()}
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="mt-6">
-        <h3 className="text-sm font-semibold text-slate-200">Coverage &amp; reliability</h3>
-        <p className="mt-1 text-xs text-slate-500">
-          Coverage is per metric across all completed videos. Stability is a heuristic: Strong (n≥20), OK (10–19), Early (&lt;10).
+      <section className="mt-8 scroll-mt-8" aria-labelledby="coverage-heading">
+        <h3 id="coverage-heading" className="text-sm font-semibold text-slate-200">
+          How complete is the data?
+        </h3>
+        <p className="mt-1 text-xs text-slate-500 max-w-3xl">
+          Per metric: how many completed videos could be scored, and how reliable the channel-wide picture is. Strong = many videos; Early = still building the picture.
         </p>
         <div className="mt-3 overflow-x-auto rounded-2xl border border-white/10 bg-white/5">
           <table className="w-full text-sm min-w-[760px]">
             <thead className="text-left text-slate-400 border-b border-white/10">
               <tr>
                 <th className="px-4 py-3">Metric</th>
-                <th className="px-4 py-3">n</th>
-                <th className="px-4 py-3">Missing</th>
-                <th className="px-4 py-3">Coverage</th>
-                <th className="px-4 py-3">Stability</th>
+                <th className="px-4 py-3">Videos scored</th>
+                <th className="px-4 py-3">Couldn&apos;t score</th>
+                <th className="px-4 py-3">Share of completed</th>
+                <th className="px-4 py-3">Reliability</th>
               </tr>
             </thead>
             <tbody>
@@ -539,12 +546,14 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
-      <div className="mt-10">
-        <h2 className="text-lg font-semibold">Detailed metrics</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Click any metric for a benchmark breakdown (based on all completed videos).
+      <section id="metrics-at-a-glance" className="mt-10 scroll-mt-8" aria-labelledby="metrics-heading">
+        <h2 id="metrics-heading" className="text-lg font-semibold">
+          At a glance
+        </h2>
+        <p className="mt-1 text-sm text-slate-400 max-w-3xl">
+          Same channel-wide typical values in card form. Click a card for definitions and the numbers behind the benchmark—not a single video.
         </p>
         <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
           <MetricsGrid
@@ -559,11 +568,31 @@ export default function ChannelReportClient(props: { encodedName: string }) {
             durationSec={0}
             eyeNotMeasurable={false}
             metricDetailContext={null}
+            channelBenchmark={
+              report?.benchmark
+                ? {
+                    completedVideos: Math.max(0, Number(report?.completed_videos ?? 0) || 0),
+                    benchmark: report.benchmark,
+                  }
+                : null
+            }
           />
         </div>
-      </div>
+      </section>
 
-      <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
+      <section
+        id="examples-and-videos"
+        className="mt-12 scroll-mt-8 pt-8 border-t border-white/10"
+        aria-labelledby="examples-heading"
+      >
+        <h2 id="examples-heading" className="text-lg font-semibold">
+          Examples &amp; individual videos
+        </h2>
+        <p className="mt-1 text-sm text-slate-400 max-w-3xl">
+          These are specific uploads—not the channel benchmark. Use them to spot patterns or open a full analysis for one recording.
+        </p>
+
+      <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <div className="text-sm font-semibold text-emerald-300/90">Top 3 videos</div>
           <div className="mt-3 space-y-2">
@@ -620,7 +649,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
 
       {coachPatterns.length > 0 ? (
         <div className="mt-10">
-          <h2 className="text-lg font-semibold">Common coaching notes</h2>
+          <h3 className="text-base font-semibold text-slate-200">Recurring notes (from video analyses)</h3>
           <div className="mt-4 space-y-3">
             {coachPatterns.map((p) => (
               <div key={p.comment} className="text-sm">
@@ -641,7 +670,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
       ) : null}
 
       <div className="mt-10">
-        <h2 className="text-lg font-semibold mb-2">All videos ({totals.totalVideos})</h2>
+        <h3 className="text-base font-semibold text-slate-200 mb-2">All videos ({totals.totalVideos})</h3>
         <div className="overflow-x-auto rounded-2xl border border-white/10 bg-white/5">
           <table className="w-full text-sm min-w-[760px]">
             <thead className="text-left text-slate-400 border-b border-white/10">
@@ -684,6 +713,7 @@ export default function ChannelReportClient(props: { encodedName: string }) {
           </table>
         </div>
       </div>
+      </section>
     </div>
   );
 }
