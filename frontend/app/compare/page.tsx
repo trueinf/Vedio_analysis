@@ -1320,7 +1320,7 @@ function CompareChannelVsVideoPane() {
                   setUploadProgress(0);
                   try {
                     const meta = await getPresignedUploadUrl(file.name);
-                    await uploadPutBlobWithProgress(meta.upload_url, file, (pct) => setUploadProgress(pct));
+                    await uploadPutBlobWithProgress(meta.upload_url, meta.token, file, (pct) => setUploadProgress(pct));
                     setJobStatus("queued");
                     const job = await createJobFromBrowserUpload(meta.storage_path, file.name, { channel_id: undefined, channel_name: "" });
                     setUploadJobId(job.job_id);
