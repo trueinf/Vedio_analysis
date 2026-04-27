@@ -8,6 +8,7 @@ const items: { href: string; label: string; icon: string }[] = [
   { href: "/dashboard", label: "Dashboard", icon: "📊" },
   { href: "/history", label: "History", icon: "🕐" },
   { href: "/compare", label: "Compare", icon: "⚡" },
+  { href: "/explain", label: "Explain", icon: "ℹ" },
 ];
 
 function isActive(href: string, pathname: string): boolean {
