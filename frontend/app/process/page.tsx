@@ -108,6 +108,12 @@ export default function ProcessPage() {
   const lastStatusesRef = useRef<Map<string, string>>(new Map());
   const liveReportSectionRef = useRef<HTMLDivElement | null>(null);
 
+  const uploadingToStorage = useMemo(() => {
+    // When a large cross-site PUT is in flight, Chromium may suspend other requests.
+    // Avoid polling the backend during that window; resume when upload finishes.
+    return uploadedJobs.some((j) => j.status === "processing" && j.stage === "uploading_to_storage");
+  }, [uploadedJobs]);
+
   const localVideoUrl = useMemo(() => {
     const pick = file ?? files[0] ?? null;
     return pick ? URL.createObjectURL(pick) : "";
@@ -189,43 +195,52 @@ export default function ProcessPage() {
     if (!uploadedJobs.length) return;
     const hasActive = uploadedJobs.some((j) => j.status === "queued" || j.status === "processing");
     if (!hasActive) return;
+    if (busy || uploadingToStorage) return;
 
     const poll = async () => {
       // Chromium may report net::ERR_NETWORK_IO_SUSPENDED if we poll while the tab is hidden,
       // the machine sleeps, or during a large same-origin upload. Skip those windows.
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (busy) return;
+      if (busy || uploadingToStorage || uploadInFlightRef.current) return;
       try {
         const prevRows = uploadedJobsRef.current;
         const ids = Array.from(
           new Set(prevRows.map((j) => j.id).filter((id) => !String(id).startsWith("uploading-")))
         );
         if (!ids.length) return;
-        const updates = await Promise.all(
-          ids.map(async (id) => {
-            const job = await getJobProgressUnified(id);
-            const row = prevRows.find((r) => r.id === id);
-            let confidence = row?.confidence;
-            if (job.status === "completed" && !confidenceFetchedRef.current.has(id)) {
-              confidenceFetchedRef.current.add(id);
-              try {
-                const d = await getAnalysisDetail(id);
-                const c = d.analysis?.confidence_score;
-                confidence = typeof c === "number" ? Math.round(c) : null;
-              } catch {
-                confidence = null;
-              }
+        // Avoid parallel polling bursts (can trigger Chromium IO suspension).
+        const updates: {
+          id: string;
+          status: string;
+          stage: string;
+          progress: number;
+          error: string;
+          confidence?: number | null;
+        }[] = [];
+        for (const id of ids) {
+          if (busy || uploadingToStorage || uploadInFlightRef.current) break;
+          const job = await getJobProgressUnified(id);
+          const row = prevRows.find((r) => r.id === id);
+          let confidence = row?.confidence;
+          if (job.status === "completed" && !confidenceFetchedRef.current.has(id)) {
+            confidenceFetchedRef.current.add(id);
+            try {
+              const d = await getAnalysisDetail(id);
+              const c = d.analysis?.confidence_score;
+              confidence = typeof c === "number" ? Math.round(c) : null;
+            } catch {
+              confidence = null;
             }
-            return {
-              id,
-              status: job.status,
-              stage: job.stage ?? "",
-              progress: Number(job.progress ?? 0),
-              error: job.error_message || "",
-              confidence,
-            };
-          })
-        );
+          }
+          updates.push({
+            id,
+            status: job.status,
+            stage: job.stage ?? "",
+            progress: Number(job.progress ?? 0),
+            error: job.error_message || "",
+            confidence,
+          });
+        }
         // Detect transitions to completed to refresh channel report.
         let anyJustCompleted = false;
         const nextStatusMap = new Map(lastStatusesRef.current);
@@ -278,7 +293,7 @@ export default function ProcessPage() {
       clearInterval(t);
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVis);
     };
-  }, [uploadedJobs, jobId, busy]);
+  }, [uploadedJobs, jobId, busy, uploadingToStorage]);
 
   const canAnalyze = useMemo(() => {
     if (busy) return false;

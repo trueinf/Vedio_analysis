@@ -13,6 +13,8 @@ function getApiBase(): string {
   return b;
 }
 
+import { supabase as supabaseClient } from "./supabaseClient";
+
 const API_BASE = getApiBase();
 
 /** Default timeout for API reads (Railway cold start + Supabase can exceed a few seconds). */
@@ -68,18 +70,37 @@ export async function getPresignedUploadUrl(filename: string): Promise<{ upload_
 }
 
 /** PUT file bytes to Supabase signed URL (XHR for optional progress). */
-export function uploadPutBlobWithProgress(uploadUrl: string, file: File, onProgress?: (pct: number) => void): Promise<void> {
+export function uploadPutBlobWithProgress(
+  uploadUrl: string,
+  token: string,
+  file: File,
+  onProgress?: (pct: number) => void
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    // Normalize any accidental repeated slashes after `/storage/v1/` (but don't touch `https://`).
+    const url = (uploadUrl || "").replace(/\/storage\/v1\/+/, "/storage/v1/");
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`Upload to storage failed (${xhr.status})`));
+      else {
+        const body = (xhr.responseText || "").slice(0, 800);
+        reject(new Error(`Upload to storage failed (${xhr.status})${body ? `: ${body}` : ""}`));
+      }
     };
     xhr.onerror = () => reject(new Error("Network error during upload to storage"));
-    xhr.open("PUT", uploadUrl);
+    xhr.responseType = "text";
+    xhr.open("PUT", url);
+    // Supabase signed upload URLs require the signing token in the Authorization header.
+    if (token && token.trim()) xhr.setRequestHeader("Authorization", `Bearer ${token.trim()}`);
+    // Supabase Storage also expects the project anon key as `apikey` for many deployments.
+    // (Dashboard uploads succeed because they run with your authenticated session.)
+    const anon = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+    if (anon) xhr.setRequestHeader("apikey", anon);
+    // Be explicit; signed uploads are generally created with upsert=false.
+    xhr.setRequestHeader("x-upsert", "false");
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.send(file);
   });
@@ -121,7 +142,33 @@ async function uploadViaPresignedToSupabase(
 ): Promise<{ job_id: string; status: JobStatus }> {
   await fetch(`${API_BASE}/api/supabase/storage/ensure-bucket`, { method: "POST" });
   const meta = await getPresignedUploadUrl(file.name);
-  await uploadPutBlobWithProgress(meta.upload_url, file, opts?.onUploadProgress);
+  // Prefer Supabase client helper (matches Storage contract precisely).
+  // Fall back to raw XHR PUT (keeps upload progress) if the client isn't configured.
+  const m = {
+    upload_url: String(meta.upload_url || "").replace(/\/storage\/v1\/+/, "/storage/v1/"),
+    storage_path: String(meta.storage_path || "").replace(/^\/+/, ""),
+    token: String(meta.token || ""),
+  };
+  const bucketFromUrl =
+    (() => {
+      const mm = m.upload_url.match(/\/object\/upload\/sign\/([^\/]+)\//i);
+      return (mm?.[1] || "").trim();
+    })() || "videos";
+
+  if (supabaseClient) {
+    const { error } = await supabaseClient.storage.from(bucketFromUrl).uploadToSignedUrl(m.storage_path, m.token, file, {
+      upsert: false,
+      contentType: file.type || "application/octet-stream",
+      // Some versions of supabase-js stringified undefined -> "undefined" and Storage returns 400.
+      cacheControl: "3600",
+    });
+    if (error) {
+      // Fallback for edge-case deployments where signed URL expects different inputs.
+      await uploadPutBlobWithProgress(m.upload_url, m.token, file, opts?.onUploadProgress);
+    }
+  } else {
+    await uploadPutBlobWithProgress(m.upload_url, m.token, file, opts?.onUploadProgress);
+  }
   return await createJobFromBrowserUpload(meta.storage_path, file.name, {
     channel_name: channelName,
     channel_id: opts?.channel_id,

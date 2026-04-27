@@ -315,9 +315,24 @@ def create_app() -> FastAPI:
     # CORS must match the browser origin (e.g. videoanalysis vs vedioanalysis.netlify.app). Use settings + regex
     # so all Netlify preview/production HTTPS hosts work; do not hardcode a single typo'd hostname here.
     _cors_origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
+    # Important: in some hosts (e.g. Railway) an env var like CORS_ORIGINS="" can override defaults with empty.
+    # If we end up empty, fall back to a safe production+dev set instead of localhost-only.
     if not _cors_origins:
-        _cors_origins = ["http://localhost:3000", "http://localhost:3001"]
-    _cors_regex = (settings.cors_origin_regex or "").strip() or None
+        _cors_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+            "https://vedioanalysis.netlify.app",
+            "https://www.vedioanalysis.netlify.app",
+            "https://videoanalysis.netlify.app",
+            "https://www.videoanalysis.netlify.app",
+        ]
+
+    _cors_regex = (settings.cors_origin_regex or "").strip()
+    if not _cors_regex:
+        _cors_regex = r"^https://.*\.netlify\.app$"
+    _cors_regex = _cors_regex or None
     if settings.cors_allow_all:
         app.add_middleware(
             CORSMiddleware,
@@ -333,12 +348,22 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=_cors_origins,
             allow_origin_regex=_cors_regex,
-            allow_credentials=True,
+            # This API does not rely on cookies; disabling credentials makes CORS more robust
+            # (and avoids subtle browser restrictions around wildcard/credentialed requests).
+            allow_credentials=False,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["*"],
             expose_headers=["*"],
             max_age=3600,
         )
+
+    logger.info(
+        "[CORS] allow_all=%s allow_origins=%s allow_origin_regex=%s allow_credentials=%s",
+        bool(settings.cors_allow_all),
+        _cors_origins,
+        _cors_regex,
+        False,
+    )
 
     # Best-effort recovery: if the server was restarted mid-job (thread-based worker),
     # move stale processing jobs back to queued so they can be retried.
@@ -372,7 +397,9 @@ def create_app() -> FastAPI:
         if not _supabase_configured():
             raise HTTPException(status_code=503, detail="Supabase is not configured on the server")
         original = safe_filename(filename)
-        storage_path = f"videos/{uuid.uuid4()}/{original}"
+        # `path` must be relative to the bucket root. Do not prefix with the bucket name.
+        # If bucket is "videos", a path like "videos/<uuid>/file.mp4" becomes ".../sign/videos/videos/..."
+        storage_path = f"{uuid.uuid4()}/{original}"
         bucket = settings.supabase_bucket.strip() or "videos"
         try:
             out = create_signed_upload_url(bucket=bucket, path=storage_path)

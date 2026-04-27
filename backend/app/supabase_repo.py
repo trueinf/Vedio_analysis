@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import re
 import time
 import uuid
 from datetime import datetime
@@ -15,6 +16,15 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 _supabase_client: Any | None = None
+
+
+def _normalize_storage_url(url: str) -> str:
+    """
+    Normalize Storage URLs that may contain repeated slashes in the `/storage/v1/` segment,
+    e.g. `/storage/v1//object/...` -> `/storage/v1/object/...`.
+    """
+    u = str(url or "")
+    return re.sub(r"/storage/v1/+", "/storage/v1/", u)
 
 
 def _configured() -> bool:
@@ -122,20 +132,26 @@ def create_signed_upload_url(*, bucket: str, path: str) -> dict[str, str]:
     if not _configured():
         raise RuntimeError("Supabase is not configured")
     sb = _client()
-    b = (bucket or settings.supabase_bucket).strip()
+    b = (bucket or settings.supabase_bucket).strip().strip("/")
+    # Defensive: bucket should be a single segment, not "videos/..." (misconfig can cause `/sign/videos/videos/...`).
+    if "/" in b:
+        b = b.split("/")[0].strip()
     p = (path or "").lstrip("/")
+    # Defensive: callers sometimes pass `videos/<...>` while also using bucket "videos".
+    # That yields signed URLs like `/sign/videos/videos/<...>` which Storage rejects (400).
+    if b and p.lower().startswith((b.lower() + "/")):
+        p = p[len(b) + 1 :]
     if not b or not p:
         raise RuntimeError("bucket and path are required")
     ensure_bucket_exists(b)
     bucket_client = sb.storage.from_(b)
     data = bucket_client.create_signed_upload_url(p)
     if isinstance(data, dict):
-        return {
-            "signed_url": str(data.get("signed_url") or data.get("signedURL") or ""),
-            "token": str(data.get("token") or ""),
-            "path": p,
-        }
-    signed_url = str(getattr(data, "signed_url", "") or getattr(data, "signedURL", "") or "")
+        signed_url = _normalize_storage_url(str(data.get("signed_url") or data.get("signedURL") or ""))
+        signed_url = signed_url.replace(f"/object/upload/sign/{b}/{b}/", f"/object/upload/sign/{b}/")
+        return {"signed_url": signed_url, "token": str(data.get("token") or ""), "path": p}
+    signed_url = _normalize_storage_url(str(getattr(data, "signed_url", "") or getattr(data, "signedURL", "") or ""))
+    signed_url = signed_url.replace(f"/object/upload/sign/{b}/{b}/", f"/object/upload/sign/{b}/")
     token = str(getattr(data, "token", "") or "")
     return {"signed_url": signed_url, "token": token, "path": p}
 
