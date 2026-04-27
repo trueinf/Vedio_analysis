@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import ChannelReportClient from "../channel/[name]/ChannelReportClient";
 import { fetchChannelsSummary, type ChannelSummary } from "@/lib/api";
 import { Card, PremiumField, PremiumChip, premiumSurfaceClass } from "@/components/ui";
+import DarkSelect, { type DarkSelectOption } from "@/components/DarkSelect";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,10 @@ export default function ExplainPage() {
     return list.filter((c) => String(c.name || "").toLowerCase().includes(q));
   }, [channels, query, mode]);
 
+  const channelOptions: DarkSelectOption[] = useMemo(() => {
+    return filtered.map((c) => ({ value: c.name, label: c.name }));
+  }, [filtered]);
+
   const encodedName = selectedName ? encodeURIComponent(selectedName) : "";
 
   return (
@@ -84,18 +89,14 @@ export default function ExplainPage() {
               </PremiumChip>
             </div>
 
-            <select
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-100 outline-none"
+            <DarkSelect
               value={selectedName}
-              onChange={(e) => setSelectedName(e.target.value)}
-              disabled={loading || !filtered.length}
-            >
-              {filtered.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedName}
+              options={channelOptions}
+              disabled={loading || !channelOptions.length}
+              placeholder="Choose a channel…"
+              emptyLabel="No channels"
+            />
 
             {err ? <div className="text-xs text-red-300 mt-1">{err}</div> : null}
             {!err && !loading && !filtered.length ? (
