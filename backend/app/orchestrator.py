@@ -141,7 +141,11 @@ def _engagement_windows(
     for b in timeline_bins:
         t0 = float(b.get("t0", 0.0))
         t1 = float(b.get("t1", t0))
-        eye = float(b.get("eye_contact") or 0.0)
+        # eye_contact is None when the presenter is not on screen in this bin
+        # (e.g. intro card / slides). Distinguish "off-camera" from genuinely
+        # low eye contact so we don't penalize engagement for it.
+        eye_raw = b.get("eye_contact")
+        presenter_on_screen = isinstance(eye_raw, (int, float)) and str(b.get("scene") or "") != "slides_or_offcamera"
         gestures_pm = float(b.get("gestures_per_min") or 0.0)
         fillers_pm = float(b.get("fillers_per_min") or 0.0)
 
@@ -155,12 +159,17 @@ def _engagement_windows(
                 overlap_tonal.append(float(te["value"]))
         tonal_std = sum(overlap_tonal) / len(overlap_tonal) if overlap_tonal else 0.0
 
-        eye_score = _clamp01(eye)
+        eye_score = _clamp01(float(eye_raw)) if presenter_on_screen else 0.0
         tone_score = _clamp01(tonal_std / 60.0)
         gesture_score = _clamp01(gestures_pm / 4.0)
         filler_penalty = _clamp01(fillers_pm / 5.0)
 
-        engagement = (eye_score * 0.3) + (tone_score * 0.3) + (gesture_score * 0.2) - (filler_penalty * 0.2)
+        if presenter_on_screen:
+            engagement = (eye_score * 0.3) + (tone_score * 0.3) + (gesture_score * 0.2) - (filler_penalty * 0.2)
+        else:
+            # Presenter off-screen: eye contact does not apply. Redistribute its
+            # weight onto tone + gestures instead of scoring eye contact as 0.
+            engagement = (tone_score * 0.45) + (gesture_score * 0.35) - (filler_penalty * 0.2)
         engagement = _clamp01(engagement)
         out.append(
             {
@@ -171,6 +180,7 @@ def _engagement_windows(
                 "gesture_score": gesture_score,
                 "filler_penalty": filler_penalty,
                 "engagement_score": engagement,
+                "presenter_on_screen": presenter_on_screen,
             }
         )
     return out
@@ -365,8 +375,8 @@ def _story_for_metric(
                 "why_problem": "This pattern lowers communication effectiveness.",
             }
         )
-    if not evidence:
-        evidence = [{"start": 0.0, "end": 0.0, "description": "No strong issue segment detected.", "impact": impact, "why_problem": "No major issue signal in sampled windows."}]
+    # When no real issue segment exists, return no evidence rather than a
+    # fabricated 0:00-0:00 entry (which surfaced as a misleading event at 0:00).
 
     return {
         "metric": metric,
@@ -566,6 +576,9 @@ class Orchestrator:
         engagement_windows = _engagement_windows(timeline, events)
         engagement_drop_events: list[dict[str, Any]] = []
         for w in engagement_windows:
+            if not w.get("presenter_on_screen", True):
+                # No presenter on screen → not an engagement issue to flag.
+                continue
             if float(w["engagement_score"]) < 0.4:
                 engagement_drop_events.append(
                     {
@@ -608,6 +621,8 @@ class Orchestrator:
         worst_rank = sorted(engagement_windows, key=lambda w: float(w["engagement_score"]))
         refined_worst = []
         for w in worst_rank:
+            if not w.get("presenter_on_screen", True):
+                continue
             if float(w["engagement_score"]) >= 0.4:
                 continue
             refined_worst.append(

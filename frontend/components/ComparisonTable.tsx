@@ -17,6 +17,16 @@ function signTone(n: number, higherBetter: boolean) {
   return good ? "text-emerald-300" : "text-red-300";
 }
 
+// Quality score for "optimal band" metrics (e.g. gestures/min): peaks inside
+// [lo, hi]; below lo scales down toward 0; above hi is penalized so that
+// excessive values do NOT outrank a healthy in-band amount.
+function bandScore(v: number, lo: number, hi: number) {
+  if (!Number.isFinite(v)) return 0;
+  if (v < lo) return Math.max(0, (v / lo) * 100);
+  if (v <= hi) return 100;
+  return Math.max(40, 100 - (v - hi) * 4);
+}
+
 function pct(v: any) {
   const num = Number(v);
   if (!Number.isFinite(num)) return "—";
@@ -74,7 +84,7 @@ export function ComparisonTable(props: {
     { label: "Speech Rate (WPM)", a: speechA, b: speechB, higherBetter: true, digits: 0 },
     { label: "Eye Contact", a: eyeRatioA == null ? null : eyeRatioA * 100, b: eyeRatioB == null ? null : eyeRatioB * 100, higherBetter: true, digits: 0, isPct: true },
     { label: "Fillers / min", a: fillersA, b: fillersB, higherBetter: false, digits: 1 },
-    { label: "Gestures / min", a: gesturesA, b: gesturesB, higherBetter: true, digits: 1 },
+    { label: "Gestures / min", a: gesturesA, b: gesturesB, higherBetter: true, digits: 1, band: [4, 20] as [number, number] },
     { label: "Tonal Variation", a: tonalA, b: tonalB, higherBetter: true, digits: 1 },
     { label: "Expression Change / min", a: exprPerMinA, b: exprPerMinB, higherBetter: true, digits: 1 },
   ];
@@ -97,7 +107,18 @@ export function ComparisonTable(props: {
               const a = r.a;
               const b = r.b;
               const delta = a == null || b == null ? null : (a as number) - (b as number);
-              const tone = delta == null ? "text-slate-300" : signTone(delta, r.higherBetter);
+              // For optimal-band metrics, colour by which video is closer to the
+              // ideal band rather than by raw magnitude (so "high" doesn't beat
+              // "normal"). The displayed delta stays the raw difference.
+              const qualityDelta =
+                (r as any).band && a != null && b != null
+                  ? bandScore(a as number, (r as any).band[0], (r as any).band[1]) -
+                    bandScore(b as number, (r as any).band[0], (r as any).band[1])
+                  : delta;
+              const tone =
+                qualityDelta == null
+                  ? "text-slate-300"
+                  : signTone(qualityDelta, (r as any).band ? true : r.higherBetter);
 
               const fmtA =
                 a == null ? "—" : r.isPct ? `${Math.round(a)}%` : r.digits ? (a as number).toFixed(r.digits) : String(Math.round(a));

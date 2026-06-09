@@ -46,7 +46,19 @@ def _get_whisper_model(model_name: str, device: str, compute_type: str) -> Whisp
         return m
 
 
-FILLERS = ["uh", "um", "like", "so", "basically", "you know"]
+# English fillers + common Hindi / Hinglish fillers (romanized and Devanagari).
+# Short, ambiguous tokens (e.g. "to", "na", "so", "ki") are intentionally omitted
+# because in Hinglish speech they are usually content words, not fillers, and
+# would produce heavy false positives.
+FILLERS = [
+    # English
+    "uh", "um", "like", "so", "basically", "you know", "i mean",
+    # Hindi / Hinglish (romanized)
+    "matlab", "yaani", "yani", "actually", "haan", "acha", "accha",
+    "wahi", "kya bolu", "kya bolun",
+    # Hindi (Devanagari)
+    "मतलब", "यानी", "हाँ", "अच्छा", "वही",
+]
 CHUNK_DURATION_SEC = 600
 PROSODY_MAX_DURATION_SEC = 300
 SAMPLING_RATE = 16000

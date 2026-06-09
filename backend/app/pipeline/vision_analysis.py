@@ -464,41 +464,43 @@ def analyze_video(
                 lm = fm_landmarks_list[0]
 
             # --- Eye contact via iris gaze ---
+            # Only measure eye contact when the presenter's iris landmarks are
+            # actually visible. When the face/iris is off-screen we skip the
+            # frame entirely rather than scoring it as "low" — eye contact does
+            # not apply when the presenter is not on camera.
             if lm is not None and lm.shape[0] >= 478:
                 # normalize landmarks to 0-1 for iris function
                 lm_norm = lm.copy()
                 lm_norm[:, 0] /= (w + 1e-6)
                 lm_norm[:, 1] /= (h + 1e-6)
                 on_cam = _iris_gaze_on_camera(lm_norm)
-            else:
-                on_cam = False
 
-            sp.eye_window.append("good" if on_cam else "low")
-            smoothed_eye = _majority(sp.eye_window) or ("good" if on_cam else "low")
+                sp.eye_window.append("good" if on_cam else "low")
+                smoothed_eye = _majority(sp.eye_window) or ("good" if on_cam else "low")
 
-            if smoothed_eye == "good":
-                sp.on_camera += 1
-                b["on_camera"] += 1
+                if smoothed_eye == "good":
+                    sp.on_camera += 1
+                    b["on_camera"] += 1
 
-            # emit eye contact event on label change
-            if sp.eye_window_label is None:
-                sp.eye_window_label = smoothed_eye
-                sp.eye_window_t0    = t_sec
-            elif sp.eye_window_label != smoothed_eye:
-                metric_events.append({
-                    "metric": "eye_contact",
-                    "label": sp.eye_window_label,
-                    "speaker_id": sid,
-                    "t0": float(sp.eye_window_t0 or t_sec),
-                    "t1": float(sp.eye_window_last_t or t_sec),
-                    "value": 1.0 if sp.eye_window_label == "good" else 0.0,
-                    "note": f"Eye contact {sp.eye_window_label} (speaker {sid})",
-                    "type": "eye_contact",
-                    "message": f"Eye contact {sp.eye_window_label}",
-                })
-                sp.eye_window_label = smoothed_eye
-                sp.eye_window_t0    = t_sec
-            sp.eye_window_last_t = t_sec
+                # emit eye contact event on label change
+                if sp.eye_window_label is None:
+                    sp.eye_window_label = smoothed_eye
+                    sp.eye_window_t0    = t_sec
+                elif sp.eye_window_label != smoothed_eye:
+                    metric_events.append({
+                        "metric": "eye_contact",
+                        "label": sp.eye_window_label,
+                        "speaker_id": sid,
+                        "t0": float(sp.eye_window_t0 or t_sec),
+                        "t1": float(sp.eye_window_last_t or t_sec),
+                        "value": 1.0 if sp.eye_window_label == "good" else 0.0,
+                        "note": f"Eye contact {sp.eye_window_label} (speaker {sid})",
+                        "type": "eye_contact",
+                        "message": f"Eye contact {sp.eye_window_label}",
+                    })
+                    sp.eye_window_label = smoothed_eye
+                    sp.eye_window_t0    = t_sec
+                sp.eye_window_last_t = t_sec
 
             # --- Expression via blendshape proxies ---
             if lm is not None:
